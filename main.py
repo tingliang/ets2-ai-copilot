@@ -51,6 +51,9 @@ class Recorder:
         self._recording = True
         print("🎤 开始录音...（松开 Alt 结束）")
 
+    def is_recording(self) -> bool:
+        return self._recording
+
     def stop_recording(self) -> np.ndarray | None:
         self._recording = False
         # 把队列里剩余的收干净
@@ -81,10 +84,14 @@ class CopilotApp:
         if self._busy:
             return
         if key in (keyboard.Key.alt, keyboard.Key.alt_l, keyboard.Key.alt_r):
+            if self.rec.is_recording():
+                return  # 长按 Alt 会触发键盘自动重复，已在录音则跳过
             self.rec.start_recording()
 
     def _on_release(self, key):
         if key in (keyboard.Key.alt, keyboard.Key.alt_l, keyboard.Key.alt_r):
+            if not self.rec.is_recording():
+                return  # 没在录音就不处理（避免重复松开误触发）
             audio = self.rec.stop_recording()
             if audio is not None and len(audio) > SAMPLE_RATE // 4:  # >0.25s 才处理
                 threading.Thread(target=self._handle, args=(audio,), daemon=True).start()

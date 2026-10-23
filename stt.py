@@ -23,8 +23,10 @@ def _get_model():
     global _model
     if _model is None:
         from faster_whisper import WhisperModel
-        # CPU 跑 base 足够快；有 GPU 会自动用 GPU（需要额外装 CUDA 版 ctranslate2）
-        _model = WhisperModel(config.WHISPER_MODEL, device="auto", compute_type="auto")
+        device = getattr(config, "WHISPER_DEVICE", "cpu") or "cpu"
+        compute = "int8" if device == "cpu" else "float16"
+        # CPU 用 int8 加速；GPU 需装 CUDA 运行时，否则会报 cublas 缺失
+        _model = WhisperModel(config.WHISPER_MODEL, device=device, compute_type=compute)
     return _model
 
 

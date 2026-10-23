@@ -160,43 +160,41 @@ class SentenceSpeaker:
             self._q.put(s)
 
     def finish(self):
-        """主线程调用：表示没有更多句子了，队列消费完即结束。"""
-        self._q.put(None)  # 哨兵
+        """主线程调用：表示这一轮没有更多句子了（占位，线程保持存活）。"""
+        pass
 
     def stop(self):
-        """打断播放并清空队列。"""
+        """打断播放并清空队列（线程保持存活，供下一轮复用）。"""
         self._stop.set()
         sd.stop()
-        # 清空队列，避免残留
         try:
             while True:
                 self._q.get_nowait()
         except queue.Empty:
             pass
+        self._stop.clear()
 
     def is_playing(self) -> bool:
         return self._playing
 
     def _run(self):
-        self._playing = True
-        try:
-            while True:
-                item = self._q.get()
-                if item is None:
-                    break
+        # 常驻线程：持续从队列取句消费，程序退出时随 daemon 结束
+        while True:
+            item = self._q.get()
+            if self._stop.is_set():
+                continue
+            try:
+                mp3 = self._synthesize(item)
+                pcm = _mp3_to_pcm(mp3)
                 if self._stop.is_set():
-                    break
-                try:
-                    mp3 = self._synthesize(item)
-                    pcm = _mp3_to_pcm(mp3)
-                    if self._stop.is_set():
-                        break
-                    sd.play(pcm, _sample_rate)
-                    sd.wait()
-                except Exception as e:
-                    print(f"[tts] 合成/播放失败: {e}")
-        finally:
-            self._playing = False
+                    continue
+                self._playing = True      # 真正开始出声才标记 playing
+                sd.play(pcm, _sample_rate)
+                sd.wait()
+            except Exception as e:
+                print(f"[tts] 合成/播放失败: {e}")
+            finally:
+                self._playing = False
 
     def _synthesize(self, text: str) -> bytes:
         async def _run():

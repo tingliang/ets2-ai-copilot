@@ -76,17 +76,21 @@ class CopilotApp:
     def __init__(self):
         self.llm = CopilotLLM()
         self.rec = Recorder()
-        self.telemetry = None   # M1 的读取器，Windows 上才可用
+        self.telemetry = None   # 遥测读取器（Windows 上才可用）
         self._busy = False
         self._ptt_keys = config.get_ptt_keys() or ()  # 按住说话的热键（可配置）
 
         from tts import TTS
         self.tts = TTS()
 
+        # 创建遥测读取器（不要求游戏已启动，连不上也能创建，之后自动重连）
         try:
             from telemetry import Ets2Telemetry
             self.telemetry = Ets2Telemetry()
-            print("[telemetry] 已连接共享内存")
+            if self.telemetry.is_connected:
+                print("[telemetry] 已连接共享内存")
+            else:
+                print("[telemetry] 尚未连接（游戏未启动），将自动重试…")
         except Exception as e:
             print(f"[telemetry] 不可用（不影响对话）: {e}")
 
@@ -98,15 +102,38 @@ class CopilotApp:
 
     # ---------- 事件自动播报（M4）----------
     def _event_loop(self):
-        """后台线程：周期读遥测 → 检测事件 → 小满主动点评。"""
+        """后台线程：周期读遥测 → 检测事件 → 小满主动点评。
+
+        支持自动重连：游戏启动后会自动接上共享内存，无需重启脚本。
+        """
         from events import EventDetector
         det = EventDetector()
         prev = None
         while not self._event_stop.is_set():
             try:
                 if self.telemetry is None:
-                    break
+                    break  # 完全不可用（非 Windows 等），退出
+
+                # 没连上（游戏还没启动/共享内存还没建）→ 尝试重连
+                if not self.telemetry.is_connected:
+                    if self.telemetry.connect():
+                        print("[telemetry] 已重新连接共享内存")
+                        det = EventDetector()  # 重连后重置事件检测，避免残留状态
+                        prev = None
+                    else:
+                        # 还没连上，等 2 秒再试（不刷屏）
+                        time.sleep(2.0)
+                        continue
+
                 cur = self.telemetry.read()
+
+                # 游戏断开（读不到 SDK 激活）时，重置事件检测状态
+                if not cur.sdk_active:
+                    det = EventDetector()
+                    prev = None
+                    time.sleep(1.0)
+                    continue
+
                 if DEBUG_EVENT:
                     # 诊断：确认遥测在动、关键字段读到了什么
                     print(
@@ -132,7 +159,10 @@ class CopilotApp:
                 self._maybe_proactive(cur)
             except Exception as e:
                 # 读遥测偶尔失败（游戏切换等），静默继续
-                pass
+                if DEBUG_EVENT:
+                    print(f"[event] 读遥测异常: {e}")
+                time.sleep(0.5)
+                continue
             time.sleep(0.5)
 
     def _maybe_proactive(self, cur):
@@ -216,7 +246,7 @@ class CopilotApp:
             threading.Thread(target=self.tts.play_filler, daemon=True).start()
 
             snap = None
-            if self.telemetry is not None:
+            if self.telemetry is not None and self.telemetry.is_connected:
                 try:
                     snap = telemetry_snapshot(self.telemetry.read())
                 except Exception:

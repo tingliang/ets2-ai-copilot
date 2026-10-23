@@ -134,7 +134,29 @@ class Ets2Telemetry:
         self._map_handle = None
         self._view = None
         self._buf = None
-        self._open()
+        self._last_error = ""
+        # 不强制连接成功：游戏可能还没启动，由调用方决定何时 connect()
+        self.connect()
+
+    # ---------- 连接 / 重连 ----------
+    def connect(self) -> bool:
+        """尝试打开共享内存。成功返回 True；失败（游戏未开等）返回 False，不抛异常。
+
+        可在游戏启动后再调用本方法重连。
+        """
+        if self._buf is not None:
+            return True  # 已连接
+        try:
+            self._open()
+            return True
+        except Exception as e:
+            # 静默返回 False，由调用方决定是否打印/重试
+            self._last_error = str(e)
+            return False
+
+    @property
+    def is_connected(self) -> bool:
+        return self._buf is not None
 
     # ---------- Windows API 打开共享内存 ----------
     def _open(self):

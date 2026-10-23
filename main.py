@@ -72,6 +72,9 @@ class CopilotApp:
         self.telemetry = None   # M1 的读取器，Windows 上才可用
         self._busy = False
 
+        from tts import TTS
+        self.tts = TTS()
+
         try:
             from telemetry import Ets2Telemetry
             self.telemetry = Ets2Telemetry()
@@ -84,6 +87,10 @@ class CopilotApp:
         if self._busy:
             return
         if key in (keyboard.Key.alt, keyboard.Key.alt_l, keyboard.Key.alt_r):
+            if self.tts.is_playing():
+                # 正在朗读时按 Alt = 打断，而不是开始录音
+                self.tts.stop()
+                return
             if self.rec.is_recording():
                 return  # 长按 Alt 会触发键盘自动重复，已在录音则跳过
             self.rec.start_recording()
@@ -114,18 +121,26 @@ class CopilotApp:
                 except Exception:
                     pass
 
+            # 收集流式回复（同时打印），结束后后台朗读
             print("小满: ", end="", flush=True)
+            reply_parts = []
             for delta in self.llm.chat(user_text, snap):
+                reply_parts.append(delta)
                 print(delta, end="", flush=True)
             print()
+            reply = "".join(reply_parts).strip()
+            if reply:
+                threading.Thread(target=self.tts.speak_stream,
+                                 args=(iter([reply]),), daemon=True).start()
         except Exception as e:
             print(f"\n[error] {e}")
         finally:
             self._busy = False
 
     def run(self):
-        print(f"=== ETS2 副驾 M2（按住 Alt 说话，Ctrl+C 退出）===")
+        print(f"=== ETS2 副驾 M3（按住 Alt 说话，朗读中按 Alt 打断，Ctrl+C 退出）===")
         print(f"模型: {config.DEEPSEEK_MODEL} @ {config.DEEPSEEK_BASE_URL}")
+        print(f"语音: {config.TTS_VOICE}")
         self.rec.start()
         with keyboard.Listener(on_press=self._on_press, on_release=self._on_release) as lis:
             try:

@@ -25,3 +25,5 @@ DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
 WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "base")
 WHISPER_DEVICE = os.environ.get("WHISPER_DEVICE", "cpu")  # cpu 或 cuda（cuda 需装 CUDA 运行时）
 PTT_KEY = os.environ.get("PTT_KEY", "alt")
+TTS_VOICE = os.environ.get("TTS_VOICE", "zh-CN-shaanxi-XiaoniNeural")
+TTS_RATE = os.environ.get("TTS_RATE", "+0%")   # 语速，如 "+20%" 或 "-10%"

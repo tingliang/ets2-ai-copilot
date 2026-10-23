@@ -7,11 +7,6 @@
 """
 from __future__ import annotations
 
-import os
-
-# 国内网络友好：默认走 HF 镜像下载模型（已被设置则不覆盖）
-os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
-
 import numpy as np
 
 import config

@@ -1,11 +1,9 @@
 # ETS2 AI 副驾 — Python 依赖清单
 # 安装：pip install -r requirements.txt
 
-# M2：DeepSeek 对话 + 本地语音识别 + 按键说话
 openai>=1.0          # DeepSeek 用 OpenAI 兼容协议
 faster-whisper       # 本地中文语音识别（首次运行会自动下载模型）
-sounddevice          # 麦克风录音（PTT 按住说话）
+sounddevice          # 麦克风录音 + TTS 播放
 pynput               # 监听 Alt 按键
 numpy
-
-# M3（TTS）将加入：edge-tts
+edge-tts             # 中文朗读（微软在线 TTS，免费）

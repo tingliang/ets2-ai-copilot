@@ -3,3 +3,5 @@
 *.local
 __pycache__/
 venv/
+# 长期记忆（含用户个人偏好，不提交）
+memory.json

@@ -24,6 +24,42 @@ DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.co
 DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
 WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "base")
 WHISPER_DEVICE = os.environ.get("WHISPER_DEVICE", "cpu")  # cpu 或 cuda（cuda 需装 CUDA 运行时）
-PTT_KEY = os.environ.get("PTT_KEY", "alt")
+PTT_KEY = os.environ.get("PTT_KEY", "alt")  # 按住说话热键，见下方支持列表
 TTS_VOICE = os.environ.get("TTS_VOICE", "zh-CN-shaanxi-XiaoniNeural")
 TTS_RATE = os.environ.get("TTS_RATE", "+0%")   # 语速，如 "+20%" 或 "-10%"
+TTS_VOLUME = float(os.environ.get("TTS_VOLUME", "1.0"))  # 音量 0.0~1.0（1.0=原声）
+
+
+# ---------- 热键解析 ----------
+# 把 PTT_KEY 字符串映射到 pynput 的按键对象。支持：
+#   功能键: alt / ctrl / shift / space / enter / tab / esc / backspace ...
+#   字母键: 直接写小写字母，如 "a" / "f" / "t" ...
+def get_ptt_keys():
+    """返回 pynput 的 key 对象元组，用于等值比较；pynput 不可用时返回 None。"""
+    try:
+        from pynput import keyboard as kb
+    except Exception:
+        return None
+    s = (PTT_KEY or "").strip().lower()
+    special = {
+        "alt": (kb.Key.alt, kb.Key.alt_l, kb.Key.alt_r),
+        "ctrl": (kb.Key.ctrl, kb.Key.ctrl_l, kb.Key.ctrl_r),
+        "shift": (kb.Key.shift, kb.Key.shift_l, kb.Key.shift_r),
+        "space": (kb.Key.space,),
+        "enter": (kb.Key.enter,),
+        "tab": (kb.Key.tab,),
+        "esc": (kb.Key.esc,),
+        "backspace": (kb.Key.backspace,),
+        "caps_lock": (kb.Key.caps_lock,),
+        "caps": (kb.Key.caps_lock,),
+    }
+    if s in special:
+        return special[s]
+    if len(s) == 1 and s.isalpha():
+        return (s,)
+    return special["alt"]
+
+
+def get_ptt_key_display() -> str:
+    """返回热键的显示名（用于日志）。"""
+    return (PTT_KEY or "alt").strip()

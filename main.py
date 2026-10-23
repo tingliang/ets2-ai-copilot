@@ -21,9 +21,17 @@ from pynput import keyboard
 import config
 from llm import CopilotLLM, telemetry_snapshot
 
+DEBUG_EVENT = "--debug-event" in __import__("sys").argv  # 诊断事件检测，默认关
+
 SAMPLE_RATE = 16000
 CHANNELS = 1
 BLOCK = 1600  # 0.1s 一块
+
+# 主动闲聊（M6）参数
+PROACTIVE_IDLE = 180.0        # 安静这么久（秒）才考虑主动搭话，默认 3 分钟
+PROACTIVE_COOLDOWN = 300.0    # 两次主动闲聊最小间隔（秒），默认 5 分钟
+PROACTIVE_MIN_SPEED = 30.0    # 平稳行驶速度下限（km/h），低于此不搭话
+PROACTIVE_MAX_SPEED = 120.0   # 平稳行驶速度上限（km/h），高于此（狂飙）不搭话
 
 
 class Recorder:
@@ -70,6 +78,7 @@ class CopilotApp:
         self.rec = Recorder()
         self.telemetry = None   # M1 的读取器，Windows 上才可用
         self._busy = False
+        self._ptt_keys = config.get_ptt_keys() or ()  # 按住说话的热键（可配置）
 
         from tts import TTS
         self.tts = TTS()
@@ -84,6 +93,8 @@ class CopilotApp:
         self._event_thread = None
         self._event_stop = threading.Event()
         self._last_event_time = 0.0  # 事件播报节流用
+        self._last_activity_time = time.time()  # 上次任何「开口」的时间（主动闲聊用）
+        self._last_proactive_time = 0.0          # 上次主动闲聊的时间（冷却用）
 
     # ---------- 事件自动播报（M4）----------
     def _event_loop(self):
@@ -96,6 +107,14 @@ class CopilotApp:
                 if self.telemetry is None:
                     break
                 cur = self.telemetry.read()
+                if DEBUG_EVENT:
+                    # 诊断：确认遥测在动、关键字段读到了什么
+                    print(
+                        f"[diag] sdk={cur.sdk_active} 速度{cur.speed_kmh:.0f}km/h 限速{cur.speed_limit:.0f} "
+                        f"油量{cur.fuel:.0f}L 油警{cur.fuel_warning} 任务{cur.on_job} "
+                        f"罚款{cur.fined} 收费站{cur.tollgate} 加油{cur.refuel} "
+                        f"ax{cur.accel_x:.1f} ay{cur.accel_y:.1f} az{cur.accel_z:.1f}"
+                    )
                 for ev in det.detect(prev, cur):
                     # 节流：事件播报间隔至少 3 秒，避免刷屏
                     now = time.time()
@@ -108,10 +127,44 @@ class CopilotApp:
                     threading.Thread(target=self._speak_event,
                                      args=(ev,), daemon=True).start()
                 prev = cur
+
+                # —— 主动闲聊（M6）：长时间安静 + 稳定行驶时，小满主动找话题 ——
+                self._maybe_proactive(cur)
             except Exception as e:
                 # 读遥测偶尔失败（游戏切换等），静默继续
                 pass
             time.sleep(0.5)
+
+    def _maybe_proactive(self, cur):
+        """安静探测：连续一段时间没对话/事件，且车在平稳行驶，就主动说一句。"""
+        now = time.time()
+        # 冷却：两次主动闲聊至少间隔 PROACTIVE_COOLDOWN 秒
+        if now - self._last_proactive_time < PROACTIVE_COOLDOWN:
+            return
+        # 距上次任何开口不足 PROACTIVE_IDLE 秒 → 还不够安静，不打扰
+        if now - self._last_activity_time < PROACTIVE_IDLE:
+            return
+        # 正在对话/录音/朗读时跳过
+        if self._busy or self.rec.is_recording() or self.tts.is_playing():
+            return
+        # 只有「平稳行驶中」（速度适中、没暂停）才主动搭话，别在等红灯或停车时冒出来
+        if not (PROACTIVE_MIN_SPEED <= cur.speed_kmh <= PROACTIVE_MAX_SPEED):
+            return
+        self._last_proactive_time = now
+        self._last_activity_time = now
+        threading.Thread(target=self._speak_proactive, args=(cur,), daemon=True).start()
+
+    def _speak_proactive(self, cur):
+        """生成一句主动闲聊并朗读。"""
+        try:
+            snap = telemetry_snapshot(cur)
+            text = self.llm.proactive_chat(snap)
+            if not text:
+                return
+            print(f"[主动] 小满: {text}")
+            self.tts.speak_text(text)
+        except Exception as e:
+            print(f"[主动] 闲聊失败: {e}")
 
     def _speak_event(self, ev):
         """把事件交给 DeepSeek 生成一句评论并朗读。"""
@@ -119,6 +172,7 @@ class CopilotApp:
             comment = self.llm.comment_on_event(ev.message)
             if not comment:
                 return
+            self._last_activity_time = time.time()  # 事件播报也算「开口」
             print(f"[事件:{ev.type}] 小满: {comment}")
             self.tts.speak_text(comment)
         except Exception as e:
@@ -128,17 +182,17 @@ class CopilotApp:
     def _on_press(self, key):
         if self._busy:
             return
-        if key in (keyboard.Key.alt, keyboard.Key.alt_l, keyboard.Key.alt_r):
+        if key in self._ptt_keys:
             if self.tts.is_playing():
-                # 正在朗读时按 Alt = 打断，而不是开始录音
+                # 正在朗读时按热键 = 打断，而不是开始录音
                 self.tts.stop()
                 return
             if self.rec.is_recording():
-                return  # 长按 Alt 会触发键盘自动重复，已在录音则跳过
+                return  # 长按热键会触发键盘自动重复，已在录音则跳过
             self.rec.start_recording()
 
     def _on_release(self, key):
-        if key in (keyboard.Key.alt, keyboard.Key.alt_l, keyboard.Key.alt_r):
+        if key in self._ptt_keys:
             if not self.rec.is_recording():
                 return  # 没在录音就不处理（避免重复松开误触发）
             audio = self.rec.stop_recording()
@@ -154,6 +208,7 @@ class CopilotApp:
             if not user_text:
                 print("（没听清，忽略）")
                 return
+            self._last_activity_time = time.time()  # 用户说话也算「活动」
             print(f"你说: {user_text}")
 
             # 识别出内容后、正式回答前，播一声无语义填充音「嗯」，
@@ -184,9 +239,9 @@ class CopilotApp:
             self._busy = False
 
     def run(self):
-        print(f"=== ETS2 副驾 M4（按住 Alt 说话，朗读中按 Alt 打断，Ctrl+C 退出）===")
+        print(f"=== ETS2 副驾 M4（按住 {config.get_ptt_key_display()} 说话，朗读中按同一键打断，Ctrl+C 退出）===")
         print(f"模型: {config.DEEPSEEK_MODEL} @ {config.DEEPSEEK_BASE_URL}")
-        print(f"语音: {config.TTS_VOICE}")
+        print(f"语音: {config.TTS_VOICE}（音量 {config.TTS_VOLUME:.0%}）")
         self.rec.start()
         # 启动事件自动播报线程（M4）
         if self.telemetry is not None:

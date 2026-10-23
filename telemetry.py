@@ -18,7 +18,7 @@ ETS2 / ATS 遥测读取器（Windows 版）。
 """
 from __future__ import annotations
 
-import mmap
+import ctypes
 import struct
 from dataclasses import dataclass, field
 
@@ -35,8 +35,8 @@ def _decode(buf: bytes) -> str:
     return buf.split(b"\0", 1)[0].decode("utf-8", errors="replace").strip()
 
 
-def _read_string(mm: mmap.mmap, offset: int, size: int = _STRING_SIZE) -> str:
-    return _decode(mm[offset:offset + size])
+def _read_string(buf, offset: int, size: int = _STRING_SIZE) -> str:
+    return _decode(bytes(buf[offset:offset + size]))
 
 
 @dataclass
@@ -119,28 +119,81 @@ class TelemetryData:
 
 
 class Ets2Telemetry:
-    """读 Windows 命名共享内存的遥测读取器。"""
+    """读 Windows 命名共享内存的遥测读取器。
+
+    用 ctypes 调 Windows API（OpenFileMappingW + MapViewOfFile）打开游戏进程
+    已经创建的命名共享内存 ``Local\\SCSTelemetry``。
+
+    注意：不能用 Python 标准库 mmap 的 tagname 参数——那会在本进程里新建一块
+    独立的空映射，读到的全是 0，连不上游戏写的那块共享内存。
+    """
 
     def __init__(self, name: str = MMF_NAME, size: int = MMF_SIZE):
         self._name = name
         self._size = size
-        self._mm = mmap.mmap(-1, size, tagname=name, access=mmap.ACCESS_READ)
+        self._map_handle = None
+        self._view = None
+        self._buf = None
+        self._open()
+
+    # ---------- Windows API 打开共享内存 ----------
+    def _open(self):
+        import sys
+        if sys.platform != "win32":
+            raise RuntimeError("遥测读取仅支持 Windows")
+
+        k32 = ctypes.windll.kernel32
+
+        FILE_MAP_READ = 0x0004
+
+        k32.OpenFileMappingW.restype = ctypes.c_void_p
+        k32.OpenFileMappingW.argtypes = [ctypes.c_uint32, ctypes.c_bool,
+                                         ctypes.c_wchar_p]
+        k32.MapViewOfFile.restype = ctypes.c_void_p
+        k32.MapViewOfFile.argtypes = [ctypes.c_void_p, ctypes.c_uint32,
+                                      ctypes.c_uint32, ctypes.c_uint32,
+                                      ctypes.c_size_t]
+
+        name_w = ctypes.c_wchar_p(self._name)
+        handle = k32.OpenFileMappingW(FILE_MAP_READ, False, name_w)
+        if not handle:
+            err = ctypes.get_last_error()
+            raise RuntimeError(
+                f"打不开共享内存 {self._name}（错误码 {err}）。"
+                "请确认：1) 游戏正在运行；2) scs-telemetry.dll 已放入 "
+                "bin/win_x64/plugins/；3) 已进入驾驶界面。"
+            )
+
+        view = k32.MapViewOfFile(handle, FILE_MAP_READ, 0, 0, self._size)
+        if not view:
+            err = ctypes.get_last_error()
+            k32.CloseHandle(handle)
+            raise RuntimeError(f"映射共享内存失败（错误码 {err}）")
+
+        self._map_handle = handle
+        self._view = view
+        # 把映射视图当作一个可随机读取的字节缓冲区（C 数组）
+        self._buf = (ctypes.c_char * self._size).from_address(view)
+
+    def _read_bytes(self, offset: int, size: int) -> bytes:
+        return bytes(self._buf[offset:offset + size])
 
     def read(self) -> TelemetryData:
         d = TelemetryData()
-        mm = self._mm
-        mm.seek(0)
+        if self._buf is None:
+            return d
+        buf = self._buf
 
         # —— 第一区（offset 0）——
-        d.sdk_active = struct.unpack_from("?", mm, 0)[0]
-        d.paused = struct.unpack_from("?", mm, 4)[0]
-        d.timestamp = struct.unpack_from("Q", mm, 8)[0]
+        d.sdk_active = struct.unpack_from("?", buf, 0)[0]
+        d.paused = struct.unpack_from("?", buf, 4)[0]
+        d.timestamp = struct.unpack_from("Q", buf, 8)[0]
 
         # game 标识在第二区 scs_values.game，偏移 = 40 + 4*3 = 52
-        d.game = struct.unpack_from("I", mm, 52)[0]
+        d.game = struct.unpack_from("I", buf, 52)[0]
 
         # —— 整数区：档位 gear 在 truck_i，位于 offset 500 区 + common_i(4) = 504 ——
-        d.gear = struct.unpack_from("i", mm, 504)[0]
+        d.gear = struct.unpack_from("i", buf, 504)[0]
 
         # —— 浮点区（offset 700）——
         # truck_f 起始偏移：700 + 4(scale) + config_f 大小
@@ -161,7 +214,7 @@ class Ets2Telemetry:
         idx = 0
         def f():
             nonlocal idx
-            v = struct.unpack_from("f", mm, truck_f_offset + idx * 4)[0]
+            v = struct.unpack_from("f", buf, truck_f_offset + idx * 4)[0]
             idx += 1
             return v
 
@@ -175,7 +228,7 @@ class Ets2Telemetry:
         f()  # gameThrottle
         f()  # gameBrake
         f()  # gameClutch
-        d.cruise_control_speed = f()
+        d.cruise_control_speed = f() * 3.6  # m/s → km/h
         f()  # airPressure
         f()  # brakeTemperature
         d.fuel = f()
@@ -195,12 +248,12 @@ class Ets2Telemetry:
         d.truck_odometer = f()
         d.route_distance = f()
         f()  # routeTime
-        d.speed_limit = f()
+        d.speed_limit = f() * 3.6  # SDK 单位是 m/s，换算成 km/h
 
         d.speed_kmh = d.speed_ms * 3.6
 
         # —— 燃油容量 / 告警（config_f 里 fuelCapacity 是第 0 个 float）——
-        d.fuel_capacity = struct.unpack_from("f", mm, 704)[0]
+        d.fuel_capacity = struct.unpack_from("f", buf, 704)[0]
 
         # —— 布尔区（offset 1500）——
         # truck_b 起始：1500 + config_b 大小
@@ -216,7 +269,7 @@ class Ets2Telemetry:
         # lightsReverse, lightsHazard, cruiseControl, (wheelOnGround[16]),
         # shifterToggle[2], differentialLock, liftAxle, liftAxleIndicator,
         # trailerLiftAxle, trailerLiftAxleIndicator
-        b = lambda off: struct.unpack_from("?", mm, truck_b_offset + off)[0]
+        b = lambda off: struct.unpack_from("?", buf, truck_b_offset + off)[0]
         d.fuel_warning = b(4)
         d.wipers = b(11)
         d.blinker_left_on = b(14)
@@ -229,14 +282,14 @@ class Ets2Telemetry:
         #            + wheelPosition[16]*3 = 3+3+3+48 = 57 个 float
         config_fv_size = 57
         truck_fv_offset = 1640 + config_fv_size * 4  # = 1640 + 228 = 1868
-        d.accel_x = struct.unpack_from("f", mm, truck_fv_offset + 6 * 4)[0]   # accelerationX
-        d.accel_y = struct.unpack_from("f", mm, truck_fv_offset + 7 * 4)[0]   # accelerationY
-        d.accel_z = struct.unpack_from("f", mm, truck_fv_offset + 8 * 4)[0]   # accelerationZ
+        d.accel_x = struct.unpack_from("f", buf, truck_fv_offset + 6 * 4)[0]   # accelerationX
+        d.accel_y = struct.unpack_from("f", buf, truck_fv_offset + 7 * 4)[0]   # accelerationY
+        d.accel_z = struct.unpack_from("f", buf, truck_fv_offset + 8 * 4)[0]   # accelerationZ
 
         # —— 坐标（第八区 truck_dp，offset 2200）——
-        d.coordinate_x = struct.unpack_from("d", mm, 2200)[0]
-        d.coordinate_y = struct.unpack_from("d", mm, 2208)[0]
-        d.coordinate_z = struct.unpack_from("d", mm, 2216)[0]
+        d.coordinate_x = struct.unpack_from("d", buf, 2200)[0]
+        d.coordinate_y = struct.unpack_from("d", buf, 2208)[0]
+        d.coordinate_z = struct.unpack_from("d", buf, 2216)[0]
 
         # —— 字符串区（第九区，offset 2300）——
         s = 2300
@@ -244,21 +297,21 @@ class Ets2Telemetry:
         # cargo, cityDstId, cityDst, compDstId, compDst, citySrcId, citySrc,
         # compSrcId, compSrc, shifterType[16], truckLicensePlate,
         # truckLicensePlateCountryId, truckLicensePlateCountry, jobMarket[32]
-        d.truck_brand = _read_string(mm, s + 1 * _STRING_SIZE)
-        d.truck_name = _read_string(mm, s + 3 * _STRING_SIZE)
-        d.cargo = _read_string(mm, s + 5 * _STRING_SIZE)
-        d.city_dst = _read_string(mm, s + 7 * _STRING_SIZE)
-        d.comp_dst = _read_string(mm, s + 9 * _STRING_SIZE)
-        d.city_src = _read_string(mm, s + 11 * _STRING_SIZE)
-        d.comp_src = _read_string(mm, s + 13 * _STRING_SIZE)
+        d.truck_brand = _read_string(buf, s + 1 * _STRING_SIZE)
+        d.truck_name = _read_string(buf, s + 3 * _STRING_SIZE)
+        d.cargo = _read_string(buf, s + 5 * _STRING_SIZE)
+        d.city_dst = _read_string(buf, s + 7 * _STRING_SIZE)
+        d.comp_dst = _read_string(buf, s + 9 * _STRING_SIZE)
+        d.city_src = _read_string(buf, s + 11 * _STRING_SIZE)
+        d.comp_src = _read_string(buf, s + 13 * _STRING_SIZE)
 
         # —— 任务收入（第十区 config_ull.jobIncome，offset 4000）——
-        d.job_income = struct.unpack_from("Q", mm, 4000)[0]
+        d.job_income = struct.unpack_from("Q", buf, 4000)[0]
 
         # —— 任务标记（special_b，offset 4300）——
         # 顺序：onJob, jobFinished, jobCancelled, jobDelivered, fined,
         # tollgate, ferry, train, refuel, refuelPayed
-        sb = lambda off: struct.unpack_from("?", mm, 4300 + off)[0]
+        sb = lambda off: struct.unpack_from("?", buf, 4300 + off)[0]
         d.on_job = sb(0)
         d.job_finished = sb(1)
         d.job_cancelled = sb(2)
@@ -281,23 +334,30 @@ class Ets2Telemetry:
         #   = 17 个 stringsize + 16 + 32 = 17*64 + 48 = 1136
         config_s_size = 17 * 64 + 16 + 32
         fine_offence_offset = 2300 + config_s_size
-        d.fine_offence = _read_string(mm, fine_offence_offset, 32)
+        d.fine_offence = _read_string(buf, fine_offence_offset, 32)
 
         # —— 罚款金额（gameplay_ll.fineAmount，第十一区 offset 4200）——
         # 顺序：jobCancelledPenalty, jobDeliveredRevenue, fineAmount, ...
-        d.fine_amount = struct.unpack_from("q", mm, 4200 + 16)[0]
+        d.fine_amount = struct.unpack_from("q", buf, 4200 + 16)[0]
 
         # —— 计划里程（config_ui.plannedDistanceKm，第二区）——
         # config_ui 起始 = 40 + scs_values(6*4) + common_ui(4) = 40 + 24 + 4 = 68
         # config_ui 字段：gears, gears_reverse, retarderStepCount, truckWheelCount,
         #   selectorCount, time_abs_delivery, maxTrailerCount, unitCount, plannedDistanceKm
-        d.planned_distance_km = struct.unpack_from("I", mm, 68 + 8 * 4)[0]
+        d.planned_distance_km = struct.unpack_from("I", buf, 68 + 8 * 4)[0]
 
         return d
 
     def close(self):
         try:
-            self._mm.close()
+            k32 = ctypes.windll.kernel32
+            if self._view:
+                k32.UnmapViewOfFile(self._view)
+                self._view = None
+            if self._map_handle:
+                k32.CloseHandle(self._map_handle)
+                self._map_handle = None
+            self._buf = None
         except Exception:
             pass
 

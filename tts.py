@@ -24,8 +24,8 @@ import config
 
 _sample_rate = 24000  # 播放采样率（edge-tts 输出 24k）
 
-# 预合成的填充音（按下 Alt 时零延迟播放，掩盖处理延迟）
-_FILLERS = ["嗯？", "让我想想啊"]
+# 预合成的填充音（无语义语气词，避免和后续正式回答冲突）
+_FILLERS = ["嗯", "呃", "哦"]
 
 
 def synthesize(text: str) -> bytes:

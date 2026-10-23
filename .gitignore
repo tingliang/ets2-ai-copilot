@@ -5,3 +5,4 @@ __pycache__/
 venv/
 # 长期记忆（含用户个人偏好，不提交）
 memory.json
+# 注意：.env.example 是配置模板（key 留空），要提交进 git，不要忽略

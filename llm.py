@@ -99,6 +99,26 @@ class CopilotLLM:
         self.history.append({"role": "user", "content": user_text})
         self.history.append({"role": "assistant", "content": reply})
 
+    def comment_on_event(self, event_text: str) -> str:
+        """针对一个车况事件，生成一句小满风格的口头评论（简短、非流式）。"""
+        try:
+            resp = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": self.persona},
+                    {"role": "user", "content":
+                        f"刚才发生了一件事：{event_text}\n"
+                        "请用你的口吻，随口点评一句（1 句，20 字以内，简体中文，"
+                        "不要提问、不要复述事件本身）。"},
+                ],
+                max_tokens=40,
+                temperature=0.9,
+            )
+            return resp.choices[0].message.content.strip()
+        except Exception as e:
+            print(f"[llm] 事件评论生成失败: {e}")
+            return ""
+
     def reset(self):
         self.history.clear()
         self.memory = ""

@@ -1,12 +1,11 @@
 """
-M2 主循环：按住 Alt 说话 → 松开 → 本地 Whisper 识别 → DeepSeek（小满）流式回答（先打印，M3 接 TTS）。
-
-依赖（回家 pip install）：
-    pip install openai faster-whisper sounddevice pynput numpy
+ETS2 副驾主循环：按住 Alt 说话 → 本地 Whisper 识别 → DeepSeek（小满）流式回答 → TTS 朗读。
+另含事件自动播报（M4）：事故/低油/超速/罚款等车况事件触发小满主动点评。
 
 运行：
     python main.py
     - 按住 Alt 说话，松开即发送
+    - 朗读中按 Alt 打断
     - Ctrl+C 退出
 """
 from __future__ import annotations
@@ -82,6 +81,49 @@ class CopilotApp:
         except Exception as e:
             print(f"[telemetry] 不可用（不影响对话）: {e}")
 
+        self._event_thread = None
+        self._event_stop = threading.Event()
+        self._last_event_time = 0.0  # 事件播报节流用
+
+    # ---------- 事件自动播报（M4）----------
+    def _event_loop(self):
+        """后台线程：周期读遥测 → 检测事件 → 小满主动点评。"""
+        from events import EventDetector
+        det = EventDetector()
+        prev = None
+        while not self._event_stop.is_set():
+            try:
+                if self.telemetry is None:
+                    break
+                cur = self.telemetry.read()
+                for ev in det.detect(prev, cur):
+                    # 节流：事件播报间隔至少 3 秒，避免刷屏
+                    now = time.time()
+                    if now - self._last_event_time < 3.0:
+                        continue
+                    # 正在对话或朗读时，跳过事件播报（避免抢话/抢声卡）
+                    if self._busy or self.rec.is_recording() or self.tts.is_playing():
+                        continue
+                    self._last_event_time = now
+                    threading.Thread(target=self._speak_event,
+                                     args=(ev,), daemon=True).start()
+                prev = cur
+            except Exception as e:
+                # 读遥测偶尔失败（游戏切换等），静默继续
+                pass
+            time.sleep(0.5)
+
+    def _speak_event(self, ev):
+        """把事件交给 DeepSeek 生成一句评论并朗读。"""
+        try:
+            comment = self.llm.comment_on_event(ev.message)
+            if not comment:
+                return
+            print(f"[事件:{ev.type}] 小满: {comment}")
+            self.tts.speak_text(comment)
+        except Exception as e:
+            print(f"[event] 播报失败: {e}")
+
     # ---------- PTT ----------
     def _on_press(self, key):
         if self._busy:
@@ -142,15 +184,21 @@ class CopilotApp:
             self._busy = False
 
     def run(self):
-        print(f"=== ETS2 副驾 M3（按住 Alt 说话，朗读中按 Alt 打断，Ctrl+C 退出）===")
+        print(f"=== ETS2 副驾 M4（按住 Alt 说话，朗读中按 Alt 打断，Ctrl+C 退出）===")
         print(f"模型: {config.DEEPSEEK_MODEL} @ {config.DEEPSEEK_BASE_URL}")
         print(f"语音: {config.TTS_VOICE}")
         self.rec.start()
+        # 启动事件自动播报线程（M4）
+        if self.telemetry is not None:
+            self._event_thread = threading.Thread(target=self._event_loop, daemon=True)
+            self._event_thread.start()
+            print("[event] 事件自动播报已启动")
         with keyboard.Listener(on_press=self._on_press, on_release=self._on_release) as lis:
             try:
                 while True:
                     time.sleep(0.5)
             except KeyboardInterrupt:
+                self._event_stop.set()
                 print("\n退出。")
 
 

@@ -24,15 +24,18 @@ import config
 
 _sample_rate = 24000  # 播放采样率（edge-tts 输出 24k）
 
-# 预合成的填充音（无语义语气词，避免和后续正式回答冲突）
-_FILLERS = ["嗯", "呃", "哦"]
+# 预合成的填充音（无语义语气词，拉长成「思考中」的拖音）
+# 用稍慢语速合成，让「嗯」拖长成「嗯～」，填补识别到回答之间的空窗
+_FILLERS = ["嗯嗯", "呃", "哦"]
+_FILLER_RATE = "-30%"  # 语速放慢 30%，让语气词拖长
 
 
-def synthesize(text: str) -> bytes:
+def synthesize(text: str, rate: str = None) -> bytes:
     """用 edge-tts 合成一段文字，返回 mp3 字节。"""
+    rate = rate or config.TTS_RATE
     async def _run():
         communicate = __import__("edge_tts").Communicate(
-            text, config.TTS_VOICE, rate=config.TTS_RATE)
+            text, config.TTS_VOICE, rate=rate)
         buf = io.BytesIO()
         async for chunk in communicate.stream():
             if chunk["type"] == "audio":
@@ -74,8 +77,9 @@ class TTS:
         pcm_list = []
         for text in _FILLERS:
             try:
-                pcm_list.append(_mp3_to_pcm(synthesize(text)))
-                print(f"[tts] 预合成填充音: {text}")
+                # 填充音用更慢的语速合成，拉长成「嗯～」的思考拖音
+                pcm_list.append(_mp3_to_pcm(synthesize(text, rate=_FILLER_RATE)))
+                print(f"[tts] 预合成填充音: {text}（语速{_FILLER_RATE}）")
             except Exception as e:
                 print(f"[tts] 预合成填充音失败（忽略）: {e}")
         return pcm_list

@@ -93,8 +93,6 @@ class CopilotApp:
                 return
             if self.rec.is_recording():
                 return  # 长按 Alt 会触发键盘自动重复，已在录音则跳过
-            # 按下 Alt 瞬间先播一声「嗯？」填充音，让用户立刻感到被回应
-            threading.Thread(target=self.tts.play_filler, daemon=True).start()
             self.rec.start_recording()
 
     def _on_release(self, key):
@@ -103,6 +101,8 @@ class CopilotApp:
                 return  # 没在录音就不处理（避免重复松开误触发）
             audio = self.rec.stop_recording()
             if audio is not None and len(audio) > SAMPLE_RATE // 4:  # >0.25s 才处理
+                # 松开 Alt 瞬间播一声「嗯？」表示「听到了，这就想」，再开始识别
+                threading.Thread(target=self.tts.play_filler, daemon=True).start()
                 threading.Thread(target=self._handle, args=(audio,), daemon=True).start()
 
     # ---------- 一轮对话 ----------

@@ -66,6 +66,7 @@ class TTS:
     def __init__(self):
         self._playing = False
         self._stop_flag = threading.Event()
+        self._play_lock = threading.Lock()  # 同一时间只允许一个声音播放
         self._fillers = self._preload_fillers()
 
     def _preload_fillers(self) -> list[np.ndarray]:
@@ -80,17 +81,19 @@ class TTS:
         return pcm_list
 
     def play_filler(self):
-        """零延迟播放一个填充音（随机挑一个）。"""
+        """零延迟播放一个填充音（随机挑一个），播完自动释放锁。"""
         if not self._fillers:
             return
         import random
         pcm = random.choice(self._fillers)
-        try:
-            self._stop_flag.clear()
-            sd.play(pcm, _sample_rate)
-            sd.wait()
-        except Exception as e:
-            print(f"[tts] 播放填充音失败: {e}")
+        with self._play_lock:
+            if self._stop_flag.is_set():
+                return
+            try:
+                sd.play(pcm, _sample_rate)
+                sd.wait()
+            except Exception as e:
+                print(f"[tts] 播放填充音失败: {e}")
 
     def stop(self):
         """打断当前播放。"""
@@ -115,8 +118,12 @@ class TTS:
             pcm = _mp3_to_pcm(mp3)
             if self._stop_flag.is_set():
                 return
-            sd.play(pcm, _sample_rate)
-            sd.wait()
+            # 等填充音播完再出声（避免抢声卡）
+            with self._play_lock:
+                if self._stop_flag.is_set():
+                    return
+                sd.play(pcm, _sample_rate)
+                sd.wait()
         except Exception as e:
             print(f"[tts] 合成/播放失败: {e}")
         finally:

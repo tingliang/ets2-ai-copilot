@@ -72,8 +72,9 @@ class CopilotApp:
         self.telemetry = None   # M1 的读取器，Windows 上才可用
         self._busy = False
 
-        from tts import TTS
-        self.tts = TTS()
+        from tts import SentenceSpeaker
+        self.tts = SentenceSpeaker()
+        self.tts.start()
 
         try:
             from telemetry import Ets2Telemetry
@@ -121,17 +122,14 @@ class CopilotApp:
                 except Exception:
                     pass
 
-            # 收集流式回复（同时打印），结束后后台朗读
+            # 边生成边念：DeepSeek 流式吐字，按句切分，攒够一句就送 TTS 队列
+            from tts import _split_sentences
             print("小满: ", end="", flush=True)
-            reply_parts = []
-            for delta in self.llm.chat(user_text, snap):
-                reply_parts.append(delta)
-                print(delta, end="", flush=True)
+            for sentence in _split_sentences(self.llm.chat(user_text, snap)):
+                print(sentence, end="", flush=True)
+                self.tts.push(sentence)
             print()
-            reply = "".join(reply_parts).strip()
-            if reply:
-                threading.Thread(target=self.tts.speak_stream,
-                                 args=(iter([reply]),), daemon=True).start()
+            self.tts.finish()
         except Exception as e:
             print(f"\n[error] {e}")
         finally:

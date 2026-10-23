@@ -1,0 +1,5 @@
+# 不要把密钥和本地配置提交出去
+.env
+*.local
+__pycache__/
+venv/

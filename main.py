@@ -72,9 +72,8 @@ class CopilotApp:
         self.telemetry = None   # M1 的读取器，Windows 上才可用
         self._busy = False
 
-        from tts import SentenceSpeaker
-        self.tts = SentenceSpeaker()
-        self.tts.start()
+        from tts import TTS
+        self.tts = TTS()
 
         try:
             from telemetry import Ets2Telemetry
@@ -94,6 +93,8 @@ class CopilotApp:
                 return
             if self.rec.is_recording():
                 return  # 长按 Alt 会触发键盘自动重复，已在录音则跳过
+            # 按下 Alt 瞬间先播一声「嗯？」填充音，让用户立刻感到被回应
+            threading.Thread(target=self.tts.play_filler, daemon=True).start()
             self.rec.start_recording()
 
     def _on_release(self, key):
@@ -122,14 +123,17 @@ class CopilotApp:
                 except Exception:
                     pass
 
-            # 边生成边念：DeepSeek 流式吐字，按句切分，攒够一句就送 TTS 队列
-            from tts import _split_sentences
+            # 收集流式回复（同时打印），整段生成完后台朗读
             print("小满: ", end="", flush=True)
-            for sentence in _split_sentences(self.llm.chat(user_text, snap)):
-                print(sentence, end="", flush=True)
-                self.tts.push(sentence)
+            reply_parts = []
+            for delta in self.llm.chat(user_text, snap):
+                reply_parts.append(delta)
+                print(delta, end="", flush=True)
             print()
-            self.tts.finish()
+            reply = "".join(reply_parts).strip()
+            if reply:
+                threading.Thread(target=self.tts.speak_text,
+                                 args=(reply,), daemon=True).start()
         except Exception as e:
             print(f"\n[error] {e}")
         finally:

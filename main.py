@@ -250,9 +250,8 @@ class CopilotApp:
             self._last_activity_time = time.time()  # 用户说话也算「活动」
             print(f"你说: {user_text}")
 
-            # 识别出内容后、正式回答前，播一声无语义填充音「嗯」，
-            # 表示「听懂了、正在想」，自然衔接后续回答
-            threading.Thread(target=self.tts.play_filler, daemon=True).start()
+            # 已移除填充音：所有「伪沉吟」都不自然，改为直接快速回答
+            # （识别完成后立即进入 DeepSeek 生成，缩短空档）
 
             snap = None
             if self.telemetry is not None and self.telemetry.is_connected:

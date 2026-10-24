@@ -45,7 +45,8 @@ PROACTIVE_MAX_SPEED = 120.0   # 平稳行驶速度上限（km/h），高于此�
 
 
 # 句末标点：遇到这些就认为一个完整句子结束，可以立即送去朗读
-_SENT_END = "。！？!?；;\n"
+# 注意：不含换行 \n（流式输出里换行可能出现在句子中间，会导致切得太碎）
+_SENT_END = "。！？!?；;"
 
 
 def split_sentences(stream_text: str, pending: str):

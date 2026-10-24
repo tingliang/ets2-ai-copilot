@@ -37,8 +37,10 @@ def synthesize(text: str, rate: str = None) -> bytes:
     """用 edge-tts 合成一段文字，返回 mp3 字节。
 
     注意：edge-tts 是纯文本合成，不支持 SSML（<break> 等标签会被当文字读）。
+    合成失败（返回空音频）时自动重试一次，应对偶发的网络限流。
     """
     rate = rate or config.TTS_RATE
+
     async def _run():
         communicate = __import__("edge_tts").Communicate(
             text, config.TTS_VOICE, rate=rate)
@@ -48,7 +50,16 @@ def synthesize(text: str, rate: str = None) -> bytes:
                 buf.write(chunk["data"])
         return buf.getvalue()
 
-    return asyncio.run(_run())
+    for attempt in (1, 2):
+        data = asyncio.run(_run())
+        if data:
+            return data
+        if attempt == 2:
+            break
+        # 空音频（可能被限流），稍等片刻重试一次
+        import time
+        time.sleep(0.3)
+    raise RuntimeError("No audio was received. Please verify that your parameters are correct.")
 
 
 def _mp3_to_pcm(mp3_bytes: bytes) -> np.ndarray:
@@ -115,9 +126,18 @@ class TTS:
             self.speak_text(item)
 
     def speak_sentence(self, text: str):
-        """把一个完整句子送入播放队列（后台串行合成+播放，不阻塞）。"""
-        text = text.strip()
+        """把一个完整句子送入播放队列（后台串行合成+播放，不阻塞）。
+
+        过滤：去掉空白和纯标点后，若不足 1 个字则丢弃，
+        避免把过短/纯标点片段丢给 edge-tts 导致「No audio was received」。
+        """
+        text = (text or "").strip()
         if not text or self._sent_queue is None:
+            return
+        # 去掉标点/空白后检查是否还有实际内容
+        import re
+        meaningful = re.sub(r"[\s。！？!?；;，、,.：:…—\-~·]+", "", text)
+        if len(meaningful) < 1:
             return
         self._sent_queue.put(text)
 

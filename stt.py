@@ -61,13 +61,15 @@ def _setup_cuda_dll_path():
 def _get_model():
     global _model
     if _model is None:
-        from faster_whisper import WhisperModel
         device = getattr(config, "WHISPER_DEVICE", "cpu") or "cpu"
         # GPU 必须用 float16：RTX 50 系（Blackwell/sm_120）的 INT8 会报
         # CUBLAS_STATUS_NOT_SUPPORTED。CPU 用 int8 加速。
         compute = "float16" if device == "cuda" else "int8"
+        # 关键：必须在 import faster_whisper（会触发 ctranslate2 加载 cublas）
+        # 之前注册 CUDA DLL 搜索路径，否则报 cublas64_12.dll not found
         if device == "cuda":
-            _setup_cuda_dll_path()  # 先注册 CUDA DLL 搜索路径
+            _setup_cuda_dll_path()
+        from faster_whisper import WhisperModel
         try:
             _model = WhisperModel(
                 config.WHISPER_MODEL, device=device, compute_type=compute)

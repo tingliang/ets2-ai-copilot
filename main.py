@@ -23,6 +23,39 @@ if sys.platform == "win32":
     except Exception:
         pass
 
+# —— 提前注册 CUDA DLL 搜索路径（必须在任何会加载 ctranslate2 的 import 之前）——
+# RTX 50 系 + pip 安装的 nvidia-*-cu12 包，ctranslate2 推理时找不到
+# cublas64_12.dll。这里进程一启动就把 nvidia/*/bin 目录加进 DLL 搜索路径。
+if sys.platform == "win32":
+    try:
+        import os as _os
+        import site as _site
+        _added = []
+        for _base in _site.getsitepackages():
+            _nvidia_root = _os.path.join(_base, "nvidia")
+            if not _os.path.isdir(_nvidia_root):
+                continue
+            for _entry in _os.listdir(_nvidia_root):
+                _bin = _os.path.join(_nvidia_root, _entry, "bin")
+                if _os.path.isdir(_bin):
+                    _has = any(
+                        f.lower().startswith(("cublas", "cudnn", "cudart",
+                                              "cufft", "curand", "cusparse",
+                                              "nvrtc", "cublaslt"))
+                        and f.lower().endswith(".dll")
+                        for f in _os.listdir(_bin)
+                    )
+                    if _has and _bin not in _added:
+                        try:
+                            _os.add_dll_directory(_bin)
+                            _added.append(_bin)
+                        except Exception:
+                            pass
+        if _added:
+            print(f"[cuda] 已注册 CUDA DLL 目录（{len(_added)} 个）")
+    except Exception as _e:
+        print(f"[cuda] 注册 CUDA DLL 目录失败（忽略）: {_e}")
+
 import numpy as np
 import sounddevice as sd
 from pynput import keyboard

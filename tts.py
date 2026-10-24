@@ -37,10 +37,8 @@ def synthesize(text: str, rate: str = None) -> bytes:
     """用 edge-tts 合成一段文字，返回 mp3 字节。
 
     注意：edge-tts 是纯文本合成，不支持 SSML（<break> 等标签会被当文字读）。
-    合成失败（返回空音频）时自动重试一次，应对偶发的网络限流。
     """
     rate = rate or config.TTS_RATE
-
     async def _run():
         communicate = __import__("edge_tts").Communicate(
             text, config.TTS_VOICE, rate=rate)
@@ -50,16 +48,7 @@ def synthesize(text: str, rate: str = None) -> bytes:
                 buf.write(chunk["data"])
         return buf.getvalue()
 
-    for attempt in (1, 2):
-        data = asyncio.run(_run())
-        if data:
-            return data
-        if attempt == 2:
-            break
-        # 空音频（可能被限流），稍等片刻重试一次
-        import time
-        time.sleep(0.3)
-    raise RuntimeError("No audio was received. Please verify that your parameters are correct.")
+    return asyncio.run(_run())
 
 
 def _mp3_to_pcm(mp3_bytes: bytes) -> np.ndarray:
@@ -81,89 +70,13 @@ def _mp3_to_pcm(mp3_bytes: bytes) -> np.ndarray:
 
 
 class TTS:
-    """整段朗读。支持打断。
-
-    另提供按句流式播放：speak_sentence() 把每个完整句子放进队列，
-    由后台线程依次「合成→播放」，实现边生成边念，消除字幕和声音的落差。
-    """
+    """整段朗读。支持打断。"""
 
     def __init__(self):
         self._playing = False
         self._stop_flag = threading.Event()
         self._play_lock = threading.Lock()  # 同一时间只允许一个声音播放
         self._current_pcm = None  # 正在播放的音频（用于打断淡出）
-
-        # —— 按句流式播放：句子队列 + 专用播放线程 ——
-        self._sent_queue: "queue.Queue" = None
-        self._sent_thread: threading.Thread = None
-        self._sent_active = False  # 流式会话进行中（未收到 end 前保持线程）
-
-    # ---------- 按句流式播放 ----------
-    def start_stream(self):
-        """开启一次流式朗读会话：起后台线程，按队列顺序播放句子。"""
-        import queue
-        # 若上一轮流还没结束（残留线程/句子），先中止它，避免新句子被吞
-        if self._sent_thread and self._sent_thread.is_alive():
-            self.abort_stream()
-        self._sent_queue = queue.Queue()
-        self._sent_active = True
-        self._sent_thread = threading.Thread(
-            target=self._stream_worker, daemon=True)
-        self._sent_thread.start()
-
-    def _stream_worker(self):
-        import queue
-        _debug = "--debug-timing" in __import__("sys").argv
-        while True:
-            # 阻塞等待，直到拿到句子或结束哨兵（不靠轮询超时判断退出，
-            # 避免 end_stream 先置 False 导致 worker 提前退出、丢弃句子）
-            item = self._sent_queue.get()
-            if item is None:
-                if _debug:
-                    print("[tts流] worker 收到结束哨兵，退出")
-                break
-            if _debug:
-                print(f"[tts流] 开始朗读: {item[:20]}")
-            self.speak_text(item)
-
-    def speak_sentence(self, text: str):
-        """把一个完整句子送入播放队列（后台串行合成+播放，不阻塞）。
-
-        过滤：去掉空白和纯标点后，若不足 1 个字则丢弃，
-        避免把过短/纯标点片段丢给 edge-tts 导致「No audio was received」。
-        """
-        text = (text or "").strip()
-        if not text or self._sent_queue is None:
-            return
-        # 去掉标点/空白后检查是否还有实际内容
-        import re
-        meaningful = re.sub(r"[\s。！？!?；;，、,.：:…—\-~·]+", "", text)
-        if len(meaningful) < 1:
-            return
-        _debug = "--debug-timing" in __import__("sys").argv
-        if _debug:
-            print(f"[tts流] 句子入队: {text[:20]}")
-        self._sent_queue.put(text)
-
-    def end_stream(self):
-        """结束流式会话：放入结束哨兵，等后台线程把剩余句子读完。"""
-        self._sent_active = False
-        if self._sent_queue is not None:
-            self._sent_queue.put(None)  # 哨兵，让 worker 读完队列后退出
-
-    def abort_stream(self):
-        """中止流式会话：清空未播句子并停止当前播放。"""
-        self._sent_active = False
-        if self._sent_queue is not None:
-            # 清空队列
-            try:
-                while True:
-                    self._sent_queue.get_nowait()
-            except Exception:
-                pass
-            # 放入哨兵，让可能仍阻塞在 get() 上的 worker 退出
-            self._sent_queue.put(None)
-        self.stop()
 
     def stop(self):
         """打断当前播放，带平滑淡出。

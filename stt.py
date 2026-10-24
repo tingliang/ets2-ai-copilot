@@ -30,6 +30,15 @@ def _setup_cuda_dll_path():
         import site
         added = []
         for base in site.getsitepackages():
+            # ctranslate2 自带 DLL（cublas64_12.dll / cudnn 等）
+            ct2 = os.path.join(base, "ctranslate2")
+            if os.path.isdir(ct2) and ct2 not in added:
+                try:
+                    os.add_dll_directory(ct2)
+                    added.append(ct2)
+                except Exception:
+                    pass
+            # nvidia/*/bin 目录
             nvidia_root = os.path.join(base, "nvidia")
             if not os.path.isdir(nvidia_root):
                 continue

@@ -24,33 +24,44 @@ if sys.platform == "win32":
         pass
 
 # —— 提前注册 CUDA DLL 搜索路径（必须在任何会加载 ctranslate2 的 import 之前）——
-# RTX 50 系 + pip 安装的 nvidia-*-cu12 包，ctranslate2 推理时找不到
-# cublas64_12.dll。这里进程一启动就把 nvidia/*/bin 目录加进 DLL 搜索路径。
+# RTX 50 系 + ctranslate2 推理时找不到 cublas64_12.dll。根因：
+# ctranslate2 把 cublas/cudnn 的 DLL 打包在 site-packages/ctranslate2/ 目录里，
+# 但 Windows 的 LoadLibrary 不会自动去那找。这里进程一启动就注册两个来源：
+#   1) site-packages/ctranslate2/ 目录本身（ctranslate2 自带的 DLL）
+#   2) site-packages/nvidia/*/bin/（pip 装的 nvidia-*-cu12 包）
 if sys.platform == "win32":
     try:
         import os as _os
         import site as _site
         _added = []
         for _base in _site.getsitepackages():
+            # 1) ctranslate2 自带 DLL
+            _ct2 = _os.path.join(_base, "ctranslate2")
+            if _os.path.isdir(_ct2) and _ct2 not in _added:
+                try:
+                    _os.add_dll_directory(_ct2)
+                    _added.append(_ct2)
+                except Exception:
+                    pass
+            # 2) nvidia/*/bin 目录
             _nvidia_root = _os.path.join(_base, "nvidia")
-            if not _os.path.isdir(_nvidia_root):
-                continue
-            for _entry in _os.listdir(_nvidia_root):
-                _bin = _os.path.join(_nvidia_root, _entry, "bin")
-                if _os.path.isdir(_bin):
-                    _has = any(
-                        f.lower().startswith(("cublas", "cudnn", "cudart",
-                                              "cufft", "curand", "cusparse",
-                                              "nvrtc", "cublaslt"))
-                        and f.lower().endswith(".dll")
-                        for f in _os.listdir(_bin)
-                    )
-                    if _has and _bin not in _added:
-                        try:
-                            _os.add_dll_directory(_bin)
-                            _added.append(_bin)
-                        except Exception:
-                            pass
+            if _os.path.isdir(_nvidia_root):
+                for _entry in _os.listdir(_nvidia_root):
+                    _bin = _os.path.join(_nvidia_root, _entry, "bin")
+                    if _os.path.isdir(_bin):
+                        _has = any(
+                            f.lower().startswith(("cublas", "cudnn", "cudart",
+                                                  "cufft", "curand", "cusparse",
+                                                  "nvrtc", "cublaslt"))
+                            and f.lower().endswith(".dll")
+                            for f in _os.listdir(_bin)
+                        )
+                        if _has and _bin not in _added:
+                            try:
+                                _os.add_dll_directory(_bin)
+                                _added.append(_bin)
+                            except Exception:
+                                pass
         if _added:
             print(f"[cuda] 已注册 CUDA DLL 目录（{len(_added)} 个）")
     except Exception as _e:

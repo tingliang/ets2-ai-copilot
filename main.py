@@ -44,6 +44,37 @@ PROACTIVE_MIN_SPEED = 30.0    # 平稳行驶速度下限（km/h），低于此�
 PROACTIVE_MAX_SPEED = 120.0   # 平稳行驶速度上限（km/h），高于此（狂飙）不搭话
 
 
+# 句末标点：遇到这些就认为一个完整句子结束，可以立即送去朗读
+_SENT_END = "。！？!?；;\n"
+
+
+def split_sentences(stream_text: str, pending: str):
+    """按句末标点把流式文本切成完整句子。
+
+    返回 (完整句子列表, 剩余未成句的尾巴)。
+    流式场景下，尾巴是还没等到句末标点的半截话，留到下一次拼上继续切。
+    """
+    buf = pending + stream_text
+    sentences = []
+    while True:
+        # 找第一个句末标点的位置
+        idx = -1
+        for i, ch in enumerate(buf):
+            if ch in _SENT_END:
+                idx = i
+                break
+        if idx == -1:
+            break
+        # 含标点截成一个句子
+        piece = buf[:idx + 1]
+        # 跳过紧随的空格/换行，避免句子开头带空白
+        rest = buf[idx + 1:].lstrip()
+        if piece.strip():
+            sentences.append(piece.strip())
+        buf = rest
+    return sentences, buf
+
+
 class Recorder:
     """按住录音、松开停止的简易 PTT 录音器。"""
 
@@ -224,8 +255,8 @@ class CopilotApp:
             return
         if key in self._ptt_keys:
             if self.tts.is_playing():
-                # 正在朗读时按热键 = 打断，而不是开始录音
-                self.tts.stop()
+                # 正在朗读时按热键 = 打断（含流式未播句子），而不是开始录音
+                self.tts.abort_stream()
                 return
             if self.rec.is_recording():
                 return  # 长按热键会触发键盘自动重复，已在录音则跳过
@@ -261,25 +292,36 @@ class CopilotApp:
                 except Exception:
                     pass
 
-            # 收集流式回复（同时打印），整段生成完后台朗读
+            # 收集流式回复（同时打印），按句切分、边生成边朗读
             print("小满: ", end="", flush=True)
+            self.tts.start_stream()  # 开启按句流式朗读
             reply_parts = []
+            pending = ""
             t_llm_start = time.time()
-            for delta in self.llm.chat(user_text, snap):
-                reply_parts.append(delta)
-                print(delta, end="", flush=True)
+            try:
+                for delta in self.llm.chat(user_text, snap):
+                    reply_parts.append(delta)
+                    print(delta, end="", flush=True)
+                    # 每来一段增量就尝试切句，切出的完整句子立刻送去朗读
+                    if any(ch in delta for ch in _SENT_END):
+                        done, pending = split_sentences(delta, pending)
+                        for s in done:
+                            self.tts.speak_sentence(s)
+            finally:
+                # 收尾：把剩余尾巴（可能没有句末标点）也送去朗读
+                tail = pending.strip()
+                if tail:
+                    self.tts.speak_sentence(tail)
+                self.tts.end_stream()
             t_llm_end = time.time()
             print()
             reply = "".join(reply_parts).strip()
-            if reply:
-                threading.Thread(target=self.tts.speak_text,
-                                 args=(reply,), daemon=True).start()
 
             if DEBUG_TIMING:
                 print(
                     f"[timing] STT {t_stt_end - t_stt_start:.2f}s | "
                     f"LLM {t_llm_end - t_llm_start:.2f}s | "
-                    f"总耗时 {time.time() - t0:.2f}s"
+                    f"总耗时 {time.time() - t0:.2f}s（按句流式，声音与字幕并行）"
                 )
         except Exception as e:
             print(f"\n[error] {e}")

@@ -70,13 +70,74 @@ def _mp3_to_pcm(mp3_bytes: bytes) -> np.ndarray:
 
 
 class TTS:
-    """整段朗读。支持打断。"""
+    """整段朗读。支持打断。
+
+    另提供按句流式播放：speak_sentence() 把每个完整句子放进队列，
+    由后台线程依次「合成→播放」，实现边生成边念，消除字幕和声音的落差。
+    """
 
     def __init__(self):
         self._playing = False
         self._stop_flag = threading.Event()
         self._play_lock = threading.Lock()  # 同一时间只允许一个声音播放
         self._current_pcm = None  # 正在播放的音频（用于打断淡出）
+
+        # —— 按句流式播放：句子队列 + 专用播放线程 ——
+        self._sent_queue: "queue.Queue" = None
+        self._sent_thread: threading.Thread = None
+        self._sent_active = False  # 流式会话进行中（未收到 end 前保持线程）
+
+    # ---------- 按句流式播放 ----------
+    def start_stream(self):
+        """开启一次流式朗读会话：起后台线程，按队列顺序播放句子。"""
+        import queue
+        # 若上一轮流还没结束（残留线程/句子），先中止它，避免新句子被吞
+        if self._sent_thread and self._sent_thread.is_alive():
+            self.abort_stream()
+        self._sent_queue = queue.Queue()
+        self._sent_active = True
+        self._sent_thread = threading.Thread(
+            target=self._stream_worker, daemon=True)
+        self._sent_thread.start()
+
+    def _stream_worker(self):
+        import queue
+        while True:
+            try:
+                item = self._sent_queue.get(timeout=0.2)
+            except queue.Empty:
+                # 会话已结束且队列空 → 退出线程
+                if not self._sent_active:
+                    break
+                continue
+            if item is None:
+                break  # end 哨兵
+            self.speak_text(item)
+
+    def speak_sentence(self, text: str):
+        """把一个完整句子送入播放队列（后台串行合成+播放，不阻塞）。"""
+        text = text.strip()
+        if not text or self._sent_queue is None:
+            return
+        self._sent_queue.put(text)
+
+    def end_stream(self):
+        """结束流式会话：清空标志，等后台线程把剩余句子读完。"""
+        self._sent_active = False
+        if self._sent_queue is not None:
+            self._sent_queue.put(None)  # 哨兵，让 worker 尽快退出
+
+    def abort_stream(self):
+        """中止流式会话：清空未播句子并停止当前播放。"""
+        self._sent_active = False
+        if self._sent_queue is not None:
+            # 清空队列
+            try:
+                while True:
+                    self._sent_queue.get_nowait()
+            except Exception:
+                pass
+        self.stop()
 
     def stop(self):
         """打断当前播放，带平滑淡出。

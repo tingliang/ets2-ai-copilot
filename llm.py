@@ -18,7 +18,7 @@ from openai import OpenAI
 import config
 
 HISTORY_KEEP = 12          # 保留最近 12 条消息（user+assistant 各算一条）
-MAX_TOKENS_REPLY = 120     # 单次回答上限（逼它说短句）
+MAX_TOKENS_REPLY = 80      # 单次回答上限（逼它说短句，减少生成延迟）
 SUMMARY_TRIGGER = 24       # 历史超过这么多条时触发压缩
 
 _PERSONA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "persona.md")

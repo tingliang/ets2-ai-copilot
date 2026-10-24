@@ -89,25 +89,57 @@ PROACTIVE_MAX_SPEED = 120.0   # 平稳行驶速度上限（km/h），高于此�
 
 
 class Recorder:
-    """按住录音、松开停止的简易 PTT 录音器。"""
+    """按住录音、松开停止的简易 PTT 录音器。
+
+    支持「无麦克风也能运行」：
+    - start() 找不到输入设备时不崩溃，标记 mic_ready=False，返回 bool
+    - 之后每次 start_recording() 都会尝试（重新）打开输入流，蓝牙耳机
+      接上后会自动恢复录音能力，无需重启脚本。
+    """
 
     def __init__(self):
         self._frames: queue.Queue = queue.Queue()
         self._recording = False
         self._chunks: list[np.ndarray] = []
+        self._stream = None
+        self.mic_ready = False  # 当前是否有可用的输入设备/流
 
     def _callback(self, indata, frames, time_info, status):
         if self._recording:
             self._frames.put(indata.copy())
 
-    def start(self):
-        self._stream = sd.InputStream(
-            samplerate=SAMPLE_RATE, channels=CHANNELS,
-            dtype="float32", blocksize=BLOCK, callback=self._callback,
-        )
-        self._stream.start()
+    def _open_stream(self) -> bool:
+        """尝试打开输入流。成功返回 True，失败（无麦克风）返回 False。"""
+        if self._stream is not None:
+            # 已有流，直接可用
+            return True
+        try:
+            self._stream = sd.InputStream(
+                samplerate=SAMPLE_RATE, channels=CHANNELS,
+                dtype="float32", blocksize=BLOCK, callback=self._callback,
+            )
+            self._stream.start()
+            self.mic_ready = True
+            return True
+        except Exception as e:
+            self._stream = None
+            self.mic_ready = False
+            return False
+
+    def start(self) -> bool:
+        """启动录音器。无麦克风也返回（不崩溃），返回是否有麦克风。"""
+        ok = self._open_stream()
+        if ok:
+            print("[mic] 麦克风就绪")
+        else:
+            print("[mic] 未检测到输入设备，语音输入暂不可用（接入后自动恢复）")
+        return ok
 
     def start_recording(self):
+        # 每次按热键都尝试（重新）打开输入流，支持蓝牙耳机后接入自动恢复
+        if not self._open_stream():
+            self.mic_ready = False
+            return  # 无麦克风，不进入录音状态
         self._chunks = []
         self._recording = True
         print("🎤 开始录音...（松开 Alt 结束）")
@@ -274,6 +306,9 @@ class CopilotApp:
             if self.rec.is_recording():
                 return  # 长按热键会触发键盘自动重复，已在录音则跳过
             self.rec.start_recording()
+            # 无麦克风时 start_recording 不进入录音状态，给个提示
+            if not self.rec.is_recording():
+                print("[mic] 没有检测到麦克风，请接入耳机/麦克风后再试")
 
     def _on_release(self, key):
         if key in self._ptt_keys:
@@ -343,6 +378,7 @@ class CopilotApp:
         print(f"模型: {config.DEEPSEEK_MODEL} @ {config.DEEPSEEK_BASE_URL}")
         print(f"人设: {getattr(config, 'PERSONA', 'xiaoman')}")
         print(f"语音: {config.TTS_VOICE}（音量 {config.TTS_VOLUME:.0%}）")
+        # 启动录音器：无麦克风也不崩溃（会打印提示，接入后自动恢复）
         self.rec.start()
         # 启动事件自动播报线程（M4）
         if self.telemetry is not None:

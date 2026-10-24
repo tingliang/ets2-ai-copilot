@@ -40,18 +40,38 @@ def _apply_volume(pcm: np.ndarray) -> np.ndarray:
 #   2. 不能放具体语义（如「让我想想」）——用户会开始等后续，反而加重等待感。
 #   3. 正确做法是接近人类「沉吟 + 呼吸」的短音，最好随机轮换。
 #
-# 注意：edge-tts 不支持 SSML（会把 <break> 当文本读出来），所以停顿
-# 靠「短音 + 后续静音」实现，而不是标签。每个填充音后都会拼 _FILLER_SILENCE_MS 静音。
+# 关键：edge-tts 不支持自定义 SSML（<break>/<prosody> 会被转义成文字），
+# 单个语气词固定约 1.3s，标点也改不了。要「拖长沉吟」只能在音频层面做：
+# 取尾音一小段做音量渐弱并重复，模拟「嗯～～～」逐渐消失的思考拖音。
 _FILLERS = [
     "嗯",
     "呃",
     "哦",
 ]
 
-# 填充音之后追加的静音（毫秒）。
-# 实测 edge-tts 合成单个语气词自带约 1.3~1.6s 拖尾（天然沉吟拖音），
-# 已足够覆盖思考空窗，这里设 0，不再额外加静音以免显得迟钝。
-_FILLER_SILENCE_MS = 0
+# 拖长参数：从语气词尾部取 _FILLER_TAIL_MS 毫秒做渐弱，重复 _FILLER_LOOP 次，
+# 让总时长从约 1.3s 延长到约 2~2.5s，更像真人在沉吟。
+_FILLER_TAIL_MS = 300     # 取尾部这段做渐弱
+_FILLER_LOOP = 3          # 重复拼接次数（越大拖得越长）
+
+
+def _lengthen_filler(pcm: np.ndarray) -> np.ndarray:
+    """把语气词音频的尾音做淡出延长，制造自然沉吟拖音。
+
+    原理：取尾部一小段，音量线性渐弱到接近 0，再重复拼接几次。
+    这样「嗯」从一声短音变成「嗯～～～」逐渐消失的感觉，而不是生硬静音。
+    """
+    if pcm is None or len(pcm) == 0:
+        return pcm
+    tail_n = int(_sample_rate * _FILLER_TAIL_MS / 1000)
+    if tail_n <= 0 or len(pcm) < tail_n:
+        return pcm
+    tail = pcm[-tail_n:].copy()
+    # 渐弱包络：1 → 0.05（不完全静音，留一点气声更自然）
+    env = np.linspace(1.0, 0.05, len(tail), dtype=np.float32)
+    faded = tail * env
+    # 重复拼接：原音 + N 次渐弱尾音
+    return np.concatenate([pcm] + [faded] * _FILLER_LOOP)
 
 
 def synthesize(text: str, rate: str = None) -> bytes:
@@ -70,12 +90,6 @@ def synthesize(text: str, rate: str = None) -> bytes:
         return buf.getvalue()
 
     return asyncio.run(_run())
-
-
-def _silence_pcm(ms: int) -> np.ndarray:
-    """生成指定时长的静音 PCM（float32 全零）。"""
-    n = int(_sample_rate * ms / 1000)
-    return np.zeros(n, dtype=np.float32)
 
 
 def _mp3_to_pcm(mp3_bytes: bytes) -> np.ndarray:
@@ -108,15 +122,14 @@ class TTS:
         self._current_pcm = None  # 正在播放的音频（用于打断淡出）
 
     def _preload_fillers(self) -> list[np.ndarray]:
-        """启动时预合成填充音，存成 PCM，用时零延迟。"""
+        """启动时预合成填充音（含尾音拖长），存成 PCM，用时零延迟。"""
         pcm_list = []
         for text in _FILLERS:
             try:
                 pcm = _mp3_to_pcm(synthesize(text))
-                if _FILLER_SILENCE_MS > 0:
-                    pcm = np.concatenate([pcm, _silence_pcm(_FILLER_SILENCE_MS)])
+                pcm = _lengthen_filler(pcm)  # 尾音淡出延长，制造沉吟拖音
                 pcm_list.append(pcm)
-                print(f"[tts] 预合成填充音: {text}")
+                print(f"[tts] 预合成填充音: {text}（约 {len(pcm)/_sample_rate:.1f}s）")
             except Exception as e:
                 print(f"[tts] 预合成填充音失败（忽略）: {e}")
         return pcm_list

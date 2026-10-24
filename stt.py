@@ -7,11 +7,55 @@
 """
 from __future__ import annotations
 
+import os
+import sys
+
 import numpy as np
 
 import config
 
 _model = None
+
+
+def _setup_cuda_dll_path():
+    """Windows 上：把 pip 安装的 nvidia CUDA 库的 bin 目录加进 DLL 搜索路径。
+
+    ctranslate2 有时找不到 pip 包里的 cublas64_12.dll / cudnn 等，需要手动
+    用 os.add_dll_directory() 把这些目录加进去。这里自动扫描 site-packages
+    下所有 nvidia 包的 bin 目录，只要里面含 cuda 相关的 dll 就注册。
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        import site
+        added = []
+        for base in site.getsitepackages():
+            nvidia_root = os.path.join(base, "nvidia")
+            if not os.path.isdir(nvidia_root):
+                continue
+            # 遍历 nvidia/cublas/bin、nvidia/cudnn/bin 等子目录
+            for entry in os.listdir(nvidia_root):
+                bin_dir = os.path.join(nvidia_root, entry, "bin")
+                if os.path.isdir(bin_dir):
+                    # 只注册含 cuda 相关 dll 的目录
+                    has_dll = any(
+                        f.lower().startswith(("cublas", "cudnn", "cudart",
+                                              "cufft", "curand", "cusparse",
+                                              "nvrtc", "cublaslt"))
+                        and f.lower().endswith(".dll")
+                        for f in os.listdir(bin_dir)
+                    )
+                    if has_dll and bin_dir not in added:
+                        try:
+                            os.add_dll_directory(bin_dir)
+                            added.append(bin_dir)
+                        except Exception:
+                            pass
+        if added:
+            print(f"[stt] 已注册 CUDA DLL 目录（{len(added)} 个）")
+    except Exception as e:
+        # 失败不影响主流程，只是 GPU 可能加载不了，会回退 CPU
+        print(f"[stt] 注册 CUDA DLL 目录失败（忽略）: {e}")
 
 
 def _get_model():
@@ -22,6 +66,8 @@ def _get_model():
         # GPU 必须用 float16：RTX 50 系（Blackwell/sm_120）的 INT8 会报
         # CUBLAS_STATUS_NOT_SUPPORTED。CPU 用 int8 加速。
         compute = "float16" if device == "cuda" else "int8"
+        if device == "cuda":
+            _setup_cuda_dll_path()  # 先注册 CUDA DLL 搜索路径
         try:
             _model = WhisperModel(
                 config.WHISPER_MODEL, device=device, compute_type=compute)

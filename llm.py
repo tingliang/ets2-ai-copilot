@@ -21,13 +21,30 @@ HISTORY_KEEP = 12          # 保留最近 12 条消息（user+assistant 各算�
 MAX_TOKENS_REPLY = 80      # 单次回答上限（逼它说短句，减少生成延迟）
 SUMMARY_TRIGGER = 24       # 历史超过这么多条时触发压缩
 
-_PERSONA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "persona.md")
+_PERSONAS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "personas")
+_LEGACY_PERSONA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "persona.md")
 _MEMORY_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "memory.json")
 
 
 def load_persona() -> str:
-    with open(_PERSONA_PATH, encoding="utf-8") as f:
-        return f.read().strip()
+    """根据 config.PERSONA 读取对应人设文件。
+
+    优先找 personas/<name>.md；找不到则回退到旧的 persona.md；
+    再找不到用内置兜底（小满），保证程序不崩。
+    """
+    name = getattr(config, "PERSONA", "xiaoman") or "xiaoman"
+    # 1) 优先 personas/<name>.md
+    path = os.path.join(_PERSONAS_DIR, f"{name}.md")
+    if os.path.exists(path):
+        with open(path, encoding="utf-8") as f:
+            return f.read().strip()
+    # 2) 回退旧 persona.md
+    if os.path.exists(_LEGACY_PERSONA_PATH):
+        with open(_LEGACY_PERSONA_PATH, encoding="utf-8") as f:
+            return f.read().strip()
+    # 3) 兜底（理论上不会走到）
+    return "你是 ETS2 里陪玩家开车聊天的副驾，说简体中文，简短回复。"
+
 
 
 class CopilotLLM:

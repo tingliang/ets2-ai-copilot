@@ -22,6 +22,7 @@ load_env()
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
 DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
+PERSONA = os.environ.get("PERSONA", "xiaoman")  # 人设名，对应 personas/<name>.md
 WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "base")
 WHISPER_DEVICE = os.environ.get("WHISPER_DEVICE", "cpu")  # cpu 或 cuda（cuda 需装 CUDA 运行时）
 PTT_KEY = os.environ.get("PTT_KEY", "alt")  # 按住说话热键，见下方支持列表

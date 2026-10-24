@@ -104,10 +104,16 @@ class TTS:
         text = text.strip()
         if not text:
             return
+        import time
+        _debug_timing = "--debug-timing" in __import__("sys").argv
+        t_synth_start = time.time()
         self._playing = True
         self._stop_flag.clear()
         try:
             mp3 = synthesize(text)
+            t_synth_end = time.time()
+            if _debug_timing:
+                print(f"[timing] TTS合成 {t_synth_end - t_synth_start:.2f}s")
             if self._stop_flag.is_set():
                 return
             pcm = _mp3_to_pcm(mp3)

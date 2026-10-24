@@ -31,6 +31,7 @@ import config
 from llm import CopilotLLM, telemetry_snapshot
 
 DEBUG_EVENT = "--debug-event" in sys.argv  # 诊断事件检测，默认关
+DEBUG_TIMING = "--debug-timing" in sys.argv  # 诊断对话延迟分段，默认关
 
 SAMPLE_RATE = 16000
 CHANNELS = 1
@@ -241,17 +242,17 @@ class CopilotApp:
     # ---------- 一轮对话 ----------
     def _handle(self, audio: np.ndarray):
         self._busy = True
+        t0 = time.time()
         try:
             import stt
+            t_stt_start = time.time()
             user_text = stt.transcribe(audio, SAMPLE_RATE)
+            t_stt_end = time.time()
             if not user_text:
                 print("（没听清，忽略）")
                 return
             self._last_activity_time = time.time()  # 用户说话也算「活动」
             print(f"你说: {user_text}")
-
-            # 已移除填充音：所有「伪沉吟」都不自然，改为直接快速回答
-            # （识别完成后立即进入 DeepSeek 生成，缩短空档）
 
             snap = None
             if self.telemetry is not None and self.telemetry.is_connected:
@@ -263,14 +264,23 @@ class CopilotApp:
             # 收集流式回复（同时打印），整段生成完后台朗读
             print("小满: ", end="", flush=True)
             reply_parts = []
+            t_llm_start = time.time()
             for delta in self.llm.chat(user_text, snap):
                 reply_parts.append(delta)
                 print(delta, end="", flush=True)
+            t_llm_end = time.time()
             print()
             reply = "".join(reply_parts).strip()
             if reply:
                 threading.Thread(target=self.tts.speak_text,
                                  args=(reply,), daemon=True).start()
+
+            if DEBUG_TIMING:
+                print(
+                    f"[timing] STT {t_stt_end - t_stt_start:.2f}s | "
+                    f"LLM {t_llm_end - t_llm_start:.2f}s | "
+                    f"总耗时 {time.time() - t0:.2f}s"
+                )
         except Exception as e:
             print(f"\n[error] {e}")
         finally:

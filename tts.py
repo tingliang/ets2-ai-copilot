@@ -44,7 +44,6 @@ def _apply_volume(pcm: np.ndarray) -> np.ndarray:
 # 靠「短音 + 后续静音」实现，而不是标签。每个填充音后都会拼 _FILLER_SILENCE_MS 静音。
 _FILLERS = [
     "嗯",
-    "嗯哼",
     "呃",
     "哦",
 ]

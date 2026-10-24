@@ -11,8 +11,17 @@ ETS2 副驾主循环：按住 Alt 说话 → 本地 Whisper 识别 → DeepSeek�
 from __future__ import annotations
 
 import queue
+import sys
 import threading
 import time
+
+# —— 强制标准输出用 UTF-8，避免 Windows 控制台（GBK/ASCII）打印中文报错 ——
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 import numpy as np
 import sounddevice as sd
@@ -21,7 +30,7 @@ from pynput import keyboard
 import config
 from llm import CopilotLLM, telemetry_snapshot
 
-DEBUG_EVENT = "--debug-event" in __import__("sys").argv  # 诊断事件检测，默认关
+DEBUG_EVENT = "--debug-event" in sys.argv  # 诊断事件检测，默认关
 
 SAMPLE_RATE = 16000
 CHANNELS = 1

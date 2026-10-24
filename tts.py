@@ -113,16 +113,17 @@ class TTS:
 
     def _stream_worker(self):
         import queue
+        _debug = "--debug-timing" in __import__("sys").argv
         while True:
-            try:
-                item = self._sent_queue.get(timeout=0.2)
-            except queue.Empty:
-                # 会话已结束且队列空 → 退出线程
-                if not self._sent_active:
-                    break
-                continue
+            # 阻塞等待，直到拿到句子或结束哨兵（不靠轮询超时判断退出，
+            # 避免 end_stream 先置 False 导致 worker 提前退出、丢弃句子）
+            item = self._sent_queue.get()
             if item is None:
-                break  # end 哨兵
+                if _debug:
+                    print("[tts流] worker 收到结束哨兵，退出")
+                break
+            if _debug:
+                print(f"[tts流] 开始朗读: {item[:20]}")
             self.speak_text(item)
 
     def speak_sentence(self, text: str):
@@ -139,13 +140,16 @@ class TTS:
         meaningful = re.sub(r"[\s。！？!?；;，、,.：:…—\-~·]+", "", text)
         if len(meaningful) < 1:
             return
+        _debug = "--debug-timing" in __import__("sys").argv
+        if _debug:
+            print(f"[tts流] 句子入队: {text[:20]}")
         self._sent_queue.put(text)
 
     def end_stream(self):
-        """结束流式会话：清空标志，等后台线程把剩余句子读完。"""
+        """结束流式会话：放入结束哨兵，等后台线程把剩余句子读完。"""
         self._sent_active = False
         if self._sent_queue is not None:
-            self._sent_queue.put(None)  # 哨兵，让 worker 尽快退出
+            self._sent_queue.put(None)  # 哨兵，让 worker 读完队列后退出
 
     def abort_stream(self):
         """中止流式会话：清空未播句子并停止当前播放。"""
@@ -157,6 +161,8 @@ class TTS:
                     self._sent_queue.get_nowait()
             except Exception:
                 pass
+            # 放入哨兵，让可能仍阻塞在 get() 上的 worker 退出
+            self._sent_queue.put(None)
         self.stop()
 
     def stop(self):

@@ -298,6 +298,14 @@ class CopilotApp:
             self._last_activity_time = time.time()  # 用户说话也算「活动」
             print(f"你说: {user_text}")
 
+            # —— 先判断是不是语音控制指令（本地执行，不发 DeepSeek，省 token 零延迟）——
+            import commands
+            cmd_reply = commands.run_command(user_text)
+            if cmd_reply:
+                threading.Thread(target=self.tts.speak_text,
+                                 args=(cmd_reply,), daemon=True).start()
+                return
+
             snap = None
             if self.telemetry is not None and self.telemetry.is_connected:
                 try:

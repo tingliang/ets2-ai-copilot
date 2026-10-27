@@ -204,21 +204,27 @@ def telemetry_snapshot(d) -> str:
     else:
         parts.append("限速未知（无导航/无限制路段）")
 
-    # 任务信息：接任务时给出起点→终点、货物、已跑/总里程、收入
+    # 任务信息：接任务时给出起点→终点、货物、全程/剩余/已跑、收入
     if d.on_job:
         route = f"{d.city_src}→{d.city_dst}"
         parts.append(f"任务{route} 运{d.cargo or '货物'}")
         if d.planned_distance_km:
             parts.append(f"全程{d.planned_distance_km}km")
+        # route_distance 是「导航剩余距离」（米），换算成 km 才是剩余路程
+        remaining_km = d.route_distance / 1000.0 if d.route_distance else 0.0
         if d.route_distance:
-            parts.append(f"已跑{d.route_distance:.0f}km")
+            parts.append(f"剩余{remaining_km:.0f}km")
+        if d.planned_distance_km and d.route_distance:
+            done_km = d.planned_distance_km - remaining_km
+            if done_km >= 0:
+                parts.append(f"已跑{done_km:.0f}km")
         if d.job_income:
             parts.append(f"收入¥{d.job_income}")
     else:
         parts.append("未接任务")
 
-    # 车辆总里程（帮助小满感知「这车开了多久」）
+    # 车辆里程表总里程（和上面的「任务剩余/全程里程」区分开，避免 LLM 混淆）
     if d.truck_odometer:
-        parts.append(f"总里程{d.truck_odometer:.0f}km")
+        parts.append(f"车辆里程表{d.truck_odometer:.0f}km")
 
     return " ".join(parts)

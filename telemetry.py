@@ -101,7 +101,7 @@ class TelemetryData:
     comp_src: str = ""
     comp_dst: str = ""
     planned_distance_km: int = 0
-    route_distance: float = 0.0
+    route_distance: float = 0.0  # 导航「剩余距离」（米，SDK navigation_distance），不是已跑里程
     cargo_damage: float = 0.0
     job_income: int = 0
 
@@ -268,7 +268,7 @@ class Ets2Telemetry:
         d.wear_chassis = f()
         f()  # wearWheels
         d.truck_odometer = f()
-        d.route_distance = f()
+        d.route_distance = f()  # 剩余距离（米）
         f()  # routeTime
         d.speed_limit = f() * 3.6  # SDK 单位是 m/s，换算成 km/h
 

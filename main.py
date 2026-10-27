@@ -113,6 +113,14 @@ class Recorder:
         if self._stream is not None:
             # 已有流，直接可用
             return True
+        # 关键：PortAudio 在初始化时会固化设备列表，之后热插拔的麦克风
+        # （如蓝牙耳机）不会被自动识别。所以每次流没打开时，先 terminate
+        # 再 initialize，强制重新枚举设备，实现「接入后自动恢复」。
+        try:
+            sd._terminate()
+            sd._initialize()
+        except Exception:
+            pass
         try:
             self._stream = sd.InputStream(
                 samplerate=SAMPLE_RATE, channels=CHANNELS,

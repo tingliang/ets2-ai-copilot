@@ -5,7 +5,7 @@
 M1 阶段只做检测 + 打印日志，不接 DeepSeek。
 
 事件类型：
-    - accident      事故/碰撞（加速度突变 + 减速剧烈）
+    - accident      事故/碰撞（水平加速度突变 + 车速门槛）
     - low_fuel      油量过低（低于告警阈值）
     - speeding      超速（超过当前限速）
     - job_started   任务开始（onJob 从 False→True）
@@ -33,13 +33,18 @@ from typing import Optional
 from telemetry import TelemetryData
 
 # 事故检测阈值（可调）
-ACCEL_IMPACT_THRESHOLD = 6.0      # 合成加速度瞬时突变（m/s²），超过视为撞击
+# 注意：只统计「水平方向」加速度（accel_x / accel_y）。
+# accel_z 包含重力与悬挂起伏，过减速带、上下坡、路面颠簸都会让它抖动，
+# 把它算进来会把「路面颠簸」误判成「撞车」，导致副驾莫名其妙说「没撞坏还能开」。
+ACCEL_IMPACT_THRESHOLD = 9.0      # 水平合成加速度（m/s²），超过视为撞击
+ACCEL_DELTA_THRESHOLD = 6.0       # 相比上一帧的「突变幅度」，避免持续高加速度反复触发
 BRAKE_SPIKE_THRESHOLD = 0.95      # 刹车踏板瞬间打满
+ACCIDENT_MIN_SPEED_KMH = 15.0     # 车速低于此值不算碰撞（停车挪库、低速剐蹭不播报）
 FUEL_LOW_LITERS = 50.0            # 油量低于此值（升）触发低油提醒
 SPEEDING_MARGIN_KMH = 5.0         # 超过限速 + 此余量才算超速
 SPEEDING_FALLBACK_KMH = 130.0     # 无导航/无限速时的纯速度兜底阈值
 SPEEDING_COOLDOWN = 30.0          # 超速播报冷却（秒），期间不重复报
-ACCIDENT_COOLDOWN = 10.0          # 事故播报冷却（秒）
+ACCIDENT_COOLDOWN = 25.0          # 事故播报冷却（秒）
 
 
 @dataclass
@@ -78,22 +83,28 @@ class EventDetector:
 
         events: list[Event] = []
 
-        # —— 事故/碰撞：加速度从低到高的上升沿突变 ——
-        # 用「当前帧合成加速度 > 阈值，且上一帧低于阈值」判断上升沿，
-        # 避免碰撞发生后加速度残留导致连续误报；再加冷却，同一事故只报一次。
+        # —— 事故/碰撞：水平加速度的瞬时突变 ——
+        # 只看 accel_x / accel_y（水平方向），忽略 accel_z（重力+悬挂起伏，
+        # 过减速带/颠簸都会抖，算进来会误判成撞车）。
+        # 用「合成水平加速度 > 阈值」且「相比上一帧有明显突变」双重条件，
+        # 既排除路面颠簸，又排除持续高加速度（如急加速）反复触发。
+        # 另加最低车速门槛：停车挪库、低速蹭到不播报。
         if prev is not None:
-            cur_mag = abs(cur.accel_x) + abs(cur.accel_y) + abs(cur.accel_z)
-            prev_mag = abs(prev.accel_x) + abs(prev.accel_y) + abs(prev.accel_z)
+            cur_mag = (cur.accel_x ** 2 + cur.accel_y ** 2) ** 0.5
+            prev_mag = (prev.accel_x ** 2 + prev.accel_y ** 2) ** 0.5
+            delta = abs(cur_mag - prev_mag)
             hard_brake = cur.user_brake > BRAKE_SPIKE_THRESHOLD
             now = time.time()
-            if now - self._last_accident >= ACCIDENT_COOLDOWN and (
-                (cur_mag > ACCEL_IMPACT_THRESHOLD and prev_mag <= ACCEL_IMPACT_THRESHOLD)
-                or (cur_mag > 3.0 and prev_mag <= 3.0 and hard_brake)
+            fast_enough = cur.speed_kmh >= ACCIDENT_MIN_SPEED_KMH
+            if now - self._last_accident >= ACCIDENT_COOLDOWN and fast_enough and (
+                (cur_mag > ACCEL_IMPACT_THRESHOLD and delta > ACCEL_DELTA_THRESHOLD)
+                or (hard_brake and cur_mag > ACCEL_IMPACT_THRESHOLD * 0.6
+                    and delta > ACCEL_DELTA_THRESHOLD * 0.6)
             ):
                 self._last_accident = now
                 events.append(Event(
                     "accident",
-                    f"疑似碰撞！加速度 {cur_mag:.1f} m/s²" + ("，急刹" if hard_brake else ""),
+                    f"疑似碰撞！水平加速度 {cur_mag:.1f} m/s²" + ("，急刹" if hard_brake else ""),
                     {"accel_mag": cur_mag, "hard_brake": hard_brake},
                 ))
 

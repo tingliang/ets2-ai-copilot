@@ -165,6 +165,7 @@ python main.py --debug-timing   # 看 STT/LLM/TTS 各段耗时
 | `TTS_LOCAL_SPEED` | 本地引擎语速（越大越快） | `1.0` |
 | `TTS_LOCAL_LEAD_SILENCE` | 本地引擎句首静音秒数（防首字被吞） | `0.12` |
 | `TTS_VOLUME` | 音量，可 >1.0 放大 | `1.0` |
+| `TTS_STREAM` | 按句流式朗读（边播边合成，降低等待） | `true` |
 
 热键支持：`alt` / `ctrl` / `shift` / `space` / `enter` / `tab` / 单个字母（如 `f`）。
 

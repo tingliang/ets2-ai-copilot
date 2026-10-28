@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import io
 import os
+import re
 import subprocess
 import tempfile
 import threading
@@ -55,6 +56,49 @@ def _normalize_loudness(pcm: np.ndarray, target_peak: float = 0.75, max_gain: fl
         return pcm
     gain = min(target_peak / peak, max_gain)
     return (pcm * gain).astype(np.float32)
+
+
+def _split_sentences(text: str) -> list[str]:
+    """按句末标点拆句，并把「单字/极短句」归并到相邻句，避免单独合成听不见。
+
+    VITS 对「行。」这类单字句合成出的峰值极低（约 0.02，几乎静音），
+    所以拆句后要把过短的句子合并到前一句，让它有上下文音量。
+    """
+    # 按句末标点切分，保留标点
+    parts = re.split(r"(?<=[。！？!?；;])", text)
+    parts = [p.strip() for p in parts if p.strip()]
+
+    merged: list[str] = []
+    for p in parts:
+        # 去掉标点后太短（≤2 字）的句子，归并到上一句
+        core = re.sub(r"[。！？!?；;，,、\s]", "", p)
+        if len(core) <= 2 and merged:
+            merged[-1] = merged[-1] + p
+        else:
+            merged.append(p)
+    return merged
+
+
+def _postprocess(pcm: np.ndarray, sample_rate: int) -> np.ndarray:
+    """句首静音 + 响度归一化 + 极短句兜底增益。
+
+    极短句（如单字「行」「嗯」）VITS 合成峰值极低（约 0.02），
+    即使归一化也几乎无音可放。这里对极短音频额外补一个增益下限，
+    保证短句也能听得清。
+    """
+    lead = int(sample_rate * config.TTS_LOCAL_LEAD_SILENCE)
+    if lead > 0:
+        pcm = np.concatenate([np.zeros(lead, dtype=np.float32), pcm])
+
+    pcm = _normalize_loudness(pcm)
+
+    # 极短句兜底：时长 < 0.5s 且归一化后仍很弱，再放大
+    dur = len(pcm) / sample_rate
+    if dur < 0.5:
+        peak = float(np.max(np.abs(pcm)))
+        if peak < 0.4:
+            pcm = np.clip(pcm * (0.75 / max(peak, 1e-4)), -1.0, 1.0).astype(np.float32)
+    return pcm
 
 
 # ==================== sherpa 本地引擎 ====================
@@ -193,6 +237,16 @@ class _SherpaTTS:
         self._tts = sherpa_onnx.OfflineTts(tts_config)
         self.sample_rate = 44100
 
+    def synthesize_raw(self, text: str) -> np.ndarray:
+        """裸合成，返回 float32 PCM（单声道，44.1k），不做任何后处理。"""
+        try:
+            gen = self._sherpa_onnx.GenerationConfig()
+            gen.speed = config.TTS_LOCAL_SPEED
+            audio = self._tts.generate(text, gen)
+        except (AttributeError, TypeError):
+            audio = self._tts.generate(text, sid=0, speed=config.TTS_LOCAL_SPEED)
+        return np.asarray(audio.samples, dtype=np.float32)
+
     def synthesize(self, text: str) -> np.ndarray:
         """合成文本，返回 float32 PCM（单声道，44.1k）。
 
@@ -201,23 +255,8 @@ class _SherpaTTS:
            避免播放设备起音延迟把第一个字的音头吞掉。
         2. 响度归一化，对齐 edge 引擎音量。
         """
-        # 兼容新旧版 sherpa-onnx 的调用方式
-        try:
-            gen = self._sherpa_onnx.GenerationConfig()
-            gen.speed = config.TTS_LOCAL_SPEED
-            audio = self._tts.generate(text, gen)
-        except (AttributeError, TypeError):
-            audio = self._tts.generate(text, sid=0, speed=config.TTS_LOCAL_SPEED)
-        pcm = np.asarray(audio.samples, dtype=np.float32)
-
-        # 1) 句首静音
-        lead = int(self.sample_rate * config.TTS_LOCAL_LEAD_SILENCE)
-        if lead > 0:
-            pcm = np.concatenate([np.zeros(lead, dtype=np.float32), pcm])
-
-        # 2) 响度归一化
-        pcm = _normalize_loudness(pcm)
-        return pcm
+        pcm = self.synthesize_raw(text)
+        return _postprocess(pcm, self.sample_rate)
 
 
 # ==================== edge 引擎 ====================
@@ -299,8 +338,48 @@ class TTS:
     def is_playing(self) -> bool:
         return self._playing
 
+    def _speak_sherpa_stream(self, text: str):
+        """按句流式：第一句合成完立即播放，之后「边播边合成」无空隙衔接。
+
+        用双缓冲流水线：
+          - 先合成第 1 句，立即 blocking=False 开播（用户此刻就听到声音）
+          - 之后每句：先合成第 N+1 句，再用 blocking=True 播第 N 句（等它播完），
+            此时第 N+1 句已就绪，下一轮直接播，无停顿。
+        全程单线程，无竞态；sd.stop() 可整体打断（stop_flag 检查）。
+        """
+        sents = _split_sentences(text)
+        if not sents:
+            return
+
+        # 合成第一句并立即开播（关键：最小化「听到声音」的延迟）
+        if self._stop_flag.is_set():
+            return
+        pcm_next = self._sherpa.synthesize(sents[0])
+        if self._stop_flag.is_set():
+            return
+        sd.stop()
+        self._current_pcm = pcm_next
+        sd.play(_apply_volume(pcm_next), self._sample_rate, blocking=False)
+
+        # 流水线：提前合成下一句，再播当前句
+        for i in range(1, len(sents)):
+            if self._stop_flag.is_set():
+                break
+            # 提前合成下一句（在播放当前句期间进行）
+            pcm = pcm_next
+            pcm_next = self._sherpa.synthesize(sents[i])
+            if self._stop_flag.is_set():
+                break
+            # 播当前句（blocking=True 等它播完，下一句已就绪）
+            self._current_pcm = pcm
+            sd.play(_apply_volume(pcm), self._sample_rate, blocking=True)
+
+        # 等最后一句播完
+        if not self._stop_flag.is_set():
+            sd.wait()
+
     def speak_text(self, text: str):
-        """整段合成 + 播放（阻塞直到读完）。"""
+        """朗读文本（阻塞直到读完）。默认按句流式，可配置整段。"""
         text = text.strip()
         if not text:
             return
@@ -311,11 +390,18 @@ class TTS:
         self._playing = True
         self._stop_flag.clear()
         try:
+            use_stream = getattr(config, "TTS_STREAM", True) and self._engine != "edge"
             if self._engine == "edge":
                 mp3 = synthesize_edge(text)
                 if self._stop_flag.is_set():
                     return
                 pcm = _mp3_to_pcm(mp3)
+            elif use_stream:
+                self._speak_sherpa_stream(text)
+                t_synth_end = time.time()
+                if _debug_timing:
+                    print(f"[timing] TTS首句合成 {t_synth_end - t_synth_start:.2f}s（流式）")
+                return
             else:
                 pcm = self._sherpa.synthesize(text)
             t_synth_end = time.time()

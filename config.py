@@ -39,6 +39,9 @@ TTS_LOCAL_MODEL_DIR = os.environ.get("TTS_LOCAL_MODEL_DIR", "")  # sherpa 模型
 TTS_LOCAL_SPEED = float(os.environ.get("TTS_LOCAL_SPEED", "1.0"))  # sherpa 语速，越大越快
 TTS_LOCAL_LEAD_SILENCE = float(os.environ.get("TTS_LOCAL_LEAD_SILENCE", "0.12"))  # 句首静音秒数（防首字被吞）
 TTS_VOLUME = float(os.environ.get("TTS_VOLUME", "1.0"))  # 音量，可 >1.0 放大（自动防削波）
+# 按句流式朗读：第一句合成完就开播、边播边合成后续句，显著降低「听到声音」的等待。
+# true=流式（默认），false=整段合成后一次播放。仅 sherpa 引擎生效。
+TTS_STREAM = os.environ.get("TTS_STREAM", "true").strip().lower() in ("1", "true", "yes", "on")
 
 
 # ---------- 热键解析 ----------

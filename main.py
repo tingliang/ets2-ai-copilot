@@ -385,7 +385,9 @@ class CopilotApp:
         print(f"=== ETS2 副驾 M4（按住 {config.get_ptt_key_display()} 说话，朗读中按同一键打断，Ctrl+C 退出）===")
         print(f"模型: {config.DEEPSEEK_MODEL} @ {config.DEEPSEEK_BASE_URL}")
         print(f"人设: {getattr(config, 'PERSONA', 'xiaoman')}")
-        print(f"语音: {config.TTS_VOICE}（音量 {config.TTS_VOLUME:.0%}）")
+        from tts import engine_name
+        print(f"语音: {engine_name()}（音量 {config.TTS_VOLUME:.0%}）")
+        print(f"识别设备: {config.WHISPER_DEVICE}（auto 会自动探测 N 卡）")
         # 启动录音器：无麦克风也不崩溃（会打印提示，接入后自动恢复）
         self.rec.start()
         # 启动事件自动播报线程（M4）

@@ -1,14 +1,15 @@
 # ETS2 AI 副驾 — Python 依赖清单
 # 安装：pip install -r requirements.txt
 #
-# ⚠️ 另需系统依赖 ffmpeg（edge-tts 解码 mp3 用，非 Python 包）：
+# ⚠️ ffmpeg 仅在 TTS_ENGINE=edge 时需要（解码 mp3），默认 sherpa 引擎不需要：
 #   Windows: winget install ffmpeg   或到 https://ffmpeg.org 下载后加入 PATH
-#   验证：  ffmpeg -version
 
 openai>=1.0          # DeepSeek 用 OpenAI 兼容协议
 faster-whisper       # 本地中文语音识别（首次运行会自动下载模型）
 sounddevice          # 麦克风录音 + TTS 播放
 pynput               # 监听 Alt 按键
 numpy
-edge-tts             # 中文朗读（微软在线 TTS，免费）
+requests             # sherpa 引擎下载模型用
+sherpa-onnx          # 本地离线 TTS（默认引擎，vits-melo-tts-zh_en）
+edge-tts             # 在线中文朗读（可选引擎，微软 TTS）
 

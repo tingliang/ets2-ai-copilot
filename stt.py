@@ -67,10 +67,64 @@ def _setup_cuda_dll_path():
         print(f"[stt] 注册 CUDA DLL 目录失败（忽略）: {e}")
 
 
+def _detect_device() -> str:
+    """根据 config.WHISPER_DEVICE 决定实际用 cpu 还是 cuda。
+
+    - 显式 cpu / cuda：直接按配置。
+    - auto：自动探测是否有可用 N 卡（CUDA），有则 cuda，否则 cpu。
+    """
+    configured = (getattr(config, "WHISPER_DEVICE", "auto") or "auto").strip().lower()
+    if configured in ("cpu", "cuda"):
+        return configured
+
+    # auto 模式：探测 CUDA
+    # 1) 先看 ctranslate2 能否直接报 CUDA 支持（最轻量、最准）
+    try:
+        from ctranslate2 import get_cuda_device_count
+        if get_cuda_device_count() > 0:
+            return "cuda"
+    except Exception:
+        pass
+    # 2) 再看 torch（若装了）能否看到 CUDA
+    try:
+        import torch
+        if torch.cuda.is_available():
+            return "cuda"
+    except Exception:
+        pass
+    # 3) 兜底：检查环境里是否有 nvidia 驱动 DLL 目录（Windows）
+    if sys.platform == "win32":
+        try:
+            import site
+            for base in site.getsitepackages():
+                nvidia_root = os.path.join(base, "nvidia")
+                if os.path.isdir(nvidia_root):
+                    for entry in os.listdir(nvidia_root):
+                        if entry.startswith(("cublas", "cudnn", "cuda")):
+                            return "cuda"
+        except Exception:
+            pass
+    return "cpu"
+
+
+def _local_model_dir() -> str | None:
+    """本地 whisper 模型目录（models/whisper-base），完整则返回路径，否则 None。
+
+    download_models.py 会从 ModelScope 魔搭下载到这里。存在时优先用本地，
+    避免首次运行从 HuggingFace 下载（国内不稳）。
+    """
+    base = os.path.dirname(os.path.abspath(__file__))
+    local = os.path.join(base, "models", "whisper-base")
+    key = ["model.bin", "config.json", "tokenizer.json", "vocabulary.txt"]
+    if all(os.path.exists(os.path.join(local, f)) for f in key):
+        return local
+    return None
+
+
 def _get_model():
     global _model
     if _model is None:
-        device = getattr(config, "WHISPER_DEVICE", "cpu") or "cpu"
+        device = _detect_device()
         # GPU 必须用 float16：RTX 50 系（Blackwell/sm_120）的 INT8 会报
         # CUBLAS_STATUS_NOT_SUPPORTED。CPU 用 int8 加速。
         compute = "float16" if device == "cuda" else "int8"
@@ -79,15 +133,18 @@ def _get_model():
         if device == "cuda":
             _setup_cuda_dll_path()
         from faster_whisper import WhisperModel
+        # 优先本地模型目录（国内无需联网），否则按 WHISPER_MODEL 名联网下载
+        model_spec = _local_model_dir() or config.WHISPER_MODEL
+        label = "本地" if _local_model_dir() else config.WHISPER_MODEL
         try:
             _model = WhisperModel(
-                config.WHISPER_MODEL, device=device, compute_type=compute)
-            print(f"[stt] 已加载 {config.WHISPER_MODEL} 模型（{device}/{compute}）")
+                model_spec, device=device, compute_type=compute)
+            print(f"[stt] 已加载 {label} 模型（{device}/{compute}）")
         except Exception as e:
             # GPU 加载失败（缺 CUDA 库/驱动不支持等）→ 自动回退 CPU，不崩溃
             print(f"[stt] GPU 加载失败（{e}），回退 CPU/int8")
             _model = WhisperModel(
-                config.WHISPER_MODEL, device="cpu", compute_type="int8")
+                model_spec, device="cpu", compute_type="int8")
     return _model
 
 

@@ -33,23 +33,7 @@
 
 ## 安装步骤
 
-### 1. 安装 Python 依赖
-
-```bash
-pip install -r requirements.txt
-```
-
-> 如果 `pip` 命令找不到，用 `python -m pip install -r requirements.txt`
-
-### 2. 安装 ffmpeg
-
-edge-tts 合成完 mp3 后需要 ffmpeg 解码成能播放的音频。
-
-- 推荐：`winget install ffmpeg`
-- 或去 [ffmpeg.org](https://ffmpeg.org) 下载，解压后把 `bin` 目录加入系统 PATH
-- 验证：命令行输入 `ffmpeg -version` 能出结果即可
-
-### 3. 放置遥测插件（关键，决定能不能读车况）
+### 0. 放置遥测插件（读车况必需，一次性）
 
 需要把 `scs-telemetry.dll` 放到游戏目录的这个**精确路径**：
 
@@ -60,27 +44,49 @@ edge-tts 合成完 mp3 后需要 ffmpeg 解码成能播放的音频。
 - 如果 `plugins` 文件夹不存在，**手动新建**
 - DLL 从官方仓库下载：[scs-sdk-plugin Releases](https://github.com/RenCloud/scs-sdk-plugin/releases)
 - **放置后必须重启游戏**才会加载插件
+- 不放置也能正常聊天，只是没有实时车况和事件播报
 
-### 4. 配置 API Key
+### 方式一：一键安装（推荐，小白首选）
 
-复制模板为本地配置，填上你的 DeepSeek Key：
+双击 `install.bat`，脚本会自动完成全部安装：
+
+| 步骤 | 内容 |
+|------|------|
+| 检测环境 | 自动检测 Python / pip，没有会提示你安装 |
+| 装依赖 | 用**清华镜像**装全部 Python 包（国内快） |
+| 检测显卡 | 自动探测 NVIDIA 显卡，有就装 CUDA 库启用 GPU 识别 |
+| 下模型 | 从 **ModelScope 魔搭**下载本地模型（whisper + TTS，约 340MB，国内稳定） |
+| 生成配置 | 自动创建 `.env` 配置模板 |
+
+装完后：**打开 `.env` 填入你的 `DEEPSEEK_API_KEY`** → 双击 `start.bat` 启动。
+
+> 全程不依赖境外站点（pip 走清华、模型走魔搭），国内开箱即用。
+
+### 方式二：手动安装（进阶 / 老用户）
 
 ```bash
-copy .env.example .env
+pip install -r requirements.txt
+# 或 pip 不可用时：python -m pip install -r requirements.txt
+
+# 下载本地模型（也可等首次运行时自动下载，但手动下更稳）
+python download_models.py
 ```
 
-然后编辑 `.env`，把 `DEEPSEEK_API_KEY=` 后面填上你的 key。
+> 如果 `pip` 命令找不到，双击 `fix_pip_path.bat` 修复，或直接用 `python -m pip` 代替。
 
-### 5.（可选）GPU 加速识别
-
-如果有 NVIDIA 显卡，可以让识别更快（RTX 50 系需按下面注意点操作）：
+**ffmpeg**（仅 `TTS_ENGINE=edge` 时需要，默认 sherpa 引擎不需要）：
 
 ```bash
-# 双击运行，自动装 CUDA 依赖并把 WHISPER_DEVICE 改成 cuda
-setup_gpu_stt.bat
+winget install ffmpeg
 ```
 
-> ⚠️ **RTX 50 系（Blackwell）注意**：GPU 模式已自动用 float16（避开 INT8 报错），并在启动时自动注册 CUDA DLL 路径。如果遇到 `cublas64_12.dll not found`，通常是因为 `site-packages/ctranslate2/` 目录的 DLL 没被找到——本程序已内置自动注册逻辑，无需手动处理。
+**GPU 加速**：`install.bat` 已自动处理；手动方式可双击 `setup_gpu_stt.bat`。
+
+> ⚠️ **RTX 50 系（Blackwell）注意**：GPU 模式已自动用 float16（避开 INT8 报错），并在启动时自动注册 CUDA DLL 路径。若重启后仍报 `cublas64_12.dll not found`，双击 `fix_cuda_path.bat` 永久修复。
+
+### 配置 API Key
+
+安装完成后，编辑 `.env`，把 `DEEPSEEK_API_KEY=` 后面填上你的 key（在 https://platform.deepseek.com 获取）。
 
 ---
 
@@ -194,6 +200,9 @@ A: 改 `.env` 里 `WHISPER_MODEL`（`small` 更准、`tiny` 更快）；有 N �
 **Q: 语音指令没反应？**
 A: 确认 ETS2 是当前前台窗口（模拟按键只作用于前台）。可先切回游戏再喊。
 
+**Q: 模型下载失败 / 太慢？**
+A: 本地模型走 ModelScope 魔搭（国内稳定）。失败时重跑 `python download_models.py` 会断点续传（已下完的文件自动跳过）；也可手动到 `https://modelscope.cn/models/` 搜 `faster-whisper-base` 和 `vits-melo-tts-zh_en` 下载整包，解压到 `models/` 下对应目录。
+
 ---
 
 ## 目录结构
@@ -206,13 +215,19 @@ ets2-ai-copilot/
 ├── llm.py             # DeepSeek 对话 + 记忆 + 车况快照
 ├── stt.py             # 本地中文语音识别（Whisper，auto 自动探测 GPU）
 ├── tts.py             # 中文朗读（双引擎：sherpa 本地离线 / edge 在线）
-├── test_tts.py        # 离线 TTS 音色试听脚本（第一关测试用）
+├── test_tts.py        # 离线 TTS 音色试听脚本
 ├── commands.py        # 语音控制指令（模拟按键控制游戏）
 ├── config.py          # 配置加载 + 热键解析
+├── download_models.py # 模型下载脚本（ModelScope 魔搭，国内稳定）
 ├── personas/          # 人设文件（xiaoman.md / gaoleng.md 等）
 │   ├── xiaoman.md     # 小满（默认）
 │   └── gaoleng.md     # 阿澈（高冷）
-├── setup_gpu_stt.bat  # GPU 识别一键配置脚本
+├── docs/              # 需求文档、开发规范
+├── install.bat        # 一键安装（装依赖 + 下模型 + 生成配置）
+├── start.bat          # 一键启动
+├── setup_gpu_stt.bat  # GPU 识别配置脚本
+├── fix_pip_path.bat   # 修复 pip 命令不可用
+├── fix_cuda_path.bat  # 修复 cublas64_12.dll 报错（重启后）
 ├── .env.example       # 配置模板（复制成 .env 使用）
 └── memory.json        # 长期记忆（运行后自动生成，不进 git）
 ```

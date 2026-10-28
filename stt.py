@@ -107,6 +107,20 @@ def _detect_device() -> str:
     return "cpu"
 
 
+def _local_model_dir() -> str | None:
+    """本地 whisper 模型目录（models/whisper-base），完整则返回路径，否则 None。
+
+    download_models.py 会从 ModelScope 魔搭下载到这里。存在时优先用本地，
+    避免首次运行从 HuggingFace 下载（国内不稳）。
+    """
+    base = os.path.dirname(os.path.abspath(__file__))
+    local = os.path.join(base, "models", "whisper-base")
+    key = ["model.bin", "config.json", "tokenizer.json", "vocabulary.txt"]
+    if all(os.path.exists(os.path.join(local, f)) for f in key):
+        return local
+    return None
+
+
 def _get_model():
     global _model
     if _model is None:
@@ -119,15 +133,18 @@ def _get_model():
         if device == "cuda":
             _setup_cuda_dll_path()
         from faster_whisper import WhisperModel
+        # 优先本地模型目录（国内无需联网），否则按 WHISPER_MODEL 名联网下载
+        model_spec = _local_model_dir() or config.WHISPER_MODEL
+        label = "本地" if _local_model_dir() else config.WHISPER_MODEL
         try:
             _model = WhisperModel(
-                config.WHISPER_MODEL, device=device, compute_type=compute)
-            print(f"[stt] 已加载 {config.WHISPER_MODEL} 模型（{device}/{compute}）")
+                model_spec, device=device, compute_type=compute)
+            print(f"[stt] 已加载 {label} 模型（{device}/{compute}）")
         except Exception as e:
             # GPU 加载失败（缺 CUDA 库/驱动不支持等）→ 自动回退 CPU，不崩溃
             print(f"[stt] GPU 加载失败（{e}），回退 CPU/int8")
             _model = WhisperModel(
-                config.WHISPER_MODEL, device="cpu", compute_type="int8")
+                model_spec, device="cpu", compute_type="int8")
     return _model
 
 

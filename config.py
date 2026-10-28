@@ -22,6 +22,8 @@ load_env()
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
 DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
+# 单次回答的 token 上限。调大能让副驾聊游戏时讲得更完整，但生成更慢、更耗 token。
+LLM_MAX_TOKENS = int(os.environ.get("LLM_MAX_TOKENS", "256"))
 PERSONA = os.environ.get("PERSONA", "xiaoman")  # 人设名，对应 personas/<name>.md
 WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "base")
 # STT 设备：auto（自动探测，有 N 卡用 cuda，否则 cpu）/ cpu / cuda

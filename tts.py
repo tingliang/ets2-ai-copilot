@@ -44,18 +44,16 @@ def _apply_volume(pcm: np.ndarray) -> np.ndarray:
     return np.clip(pcm * vol, -1.0, 1.0).astype(np.float32)
 
 
-def _normalize_loudness(pcm: np.ndarray, target_peak: float = 0.75, max_gain: float = 6.0) -> np.ndarray:
-    """响度归一化：把峰值拉到 target_peak（防太小声/太大声），但增益不超过 max_gain。
+def _apply_fixed_gain(pcm: np.ndarray, gain: float) -> np.ndarray:
+    """统一固定增益缩放。
 
-    离线 VITS 输出响度偏低（峰值约 0.18），这里归一化到接近满幅，让音量对齐 edge 引擎。
+    注意：这里刻意**不做逐句峰值归一化**。逐句归一化会把每句都拉到同一峰值，
+    但短句/长句的感知响度（RMS）不同，结果是一句响一句轻（忽高忽低）。
+    改成固定增益后，所有句子保持 VITS 原始的相对响度，句间自然一致。
     """
-    if len(pcm) == 0:
+    if gain <= 1.0:
         return pcm
-    peak = float(np.max(np.abs(pcm)))
-    if peak < 1e-6:
-        return pcm
-    gain = min(target_peak / peak, max_gain)
-    return (pcm * gain).astype(np.float32)
+    return np.clip(pcm * gain, -1.0, 1.0).astype(np.float32)
 
 
 def _split_sentences(text: str) -> list[str]:
@@ -79,25 +77,26 @@ def _split_sentences(text: str) -> list[str]:
     return merged
 
 
-def _postprocess(pcm: np.ndarray, sample_rate: int) -> np.ndarray:
-    """句首静音 + 响度归一化 + 极短句兜底增益。
+def _postprocess(pcm: np.ndarray, sample_rate: int, gain: float) -> np.ndarray:
+    """句首静音 + 固定增益 + 极短句温和兜底。
 
     极短句（如单字「行」「嗯」）VITS 合成峰值极低（约 0.02），
-    即使归一化也几乎无音可放。这里对极短音频额外补一个增益下限，
-    保证短句也能听得清。
+    即使固定增益也几乎无音可放。这里对极短音频额外补一个**温和**的增益
+    （最多再 2 倍，而不是强拉到满幅），保证短句听得清又不至于突然变响。
     """
     lead = int(sample_rate * config.TTS_LOCAL_LEAD_SILENCE)
     if lead > 0:
         pcm = np.concatenate([np.zeros(lead, dtype=np.float32), pcm])
 
-    pcm = _normalize_loudness(pcm)
+    pcm = _apply_fixed_gain(pcm, gain)
 
-    # 极短句兜底：时长 < 0.5s 且归一化后仍很弱，再放大
+    # 极短句兜底：时长 < 0.5s 且固定增益后仍很弱，再温和补偿
     dur = len(pcm) / sample_rate
     if dur < 0.5:
         peak = float(np.max(np.abs(pcm)))
         if peak < 0.4:
-            pcm = np.clip(pcm * (0.75 / max(peak, 1e-4)), -1.0, 1.0).astype(np.float32)
+            extra = min(0.4 / max(peak, 1e-4), 2.0)
+            pcm = np.clip(pcm * extra, -1.0, 1.0).astype(np.float32)
     return pcm
 
 
@@ -236,6 +235,21 @@ class _SherpaTTS:
 
         self._tts = sherpa_onnx.OfflineTts(tts_config)
         self.sample_rate = 44100
+        # 校准一次固定增益（之后所有句子都用它，避免逐句归一化导致音量忽高忽低）
+        self._gain = self._calibrate_gain()
+
+    def _calibrate_gain(self) -> float:
+        """合成一段中等长度文本，算出固定增益（目标峰值 0.75，增益上限 6.0）。"""
+        try:
+            probe = self.synthesize_raw("嗯，好的，我看看现在的情况。")
+        except Exception:
+            return 4.0  # 典型增益兜底（VITS 峰值约 0.18 → 0.75 需约 4.2 倍）
+        if len(probe) == 0:
+            return 0.75
+        peak = float(np.max(np.abs(probe)))
+        if peak < 1e-6:
+            return 0.75
+        return min(0.75 / peak, 6.0)
 
     def synthesize_raw(self, text: str) -> np.ndarray:
         """裸合成，返回 float32 PCM（单声道，44.1k），不做任何后处理。"""
@@ -256,7 +270,7 @@ class _SherpaTTS:
         2. 响度归一化，对齐 edge 引擎音量。
         """
         pcm = self.synthesize_raw(text)
-        return _postprocess(pcm, self.sample_rate)
+        return _postprocess(pcm, self.sample_rate, self._gain)
 
 
 # ==================== edge 引擎 ====================
@@ -359,10 +373,13 @@ class TTS:
         """
         sents = _split_sentences(text)
         if not sents:
-            return
+            return None
 
         # 清掉上一次可能残留的播放
         sd.stop()
+
+        import time
+        first_ready = None  # 第一句写入成功的时间（用于统计首句延迟）
 
         stream = sd.OutputStream(
             samplerate=self._sample_rate,
@@ -381,7 +398,7 @@ class TTS:
             except Exception:
                 pass
             self._speak_sherpa_whole(text)
-            return
+            return None
 
         try:
             for s in sents:
@@ -394,6 +411,8 @@ class TTS:
                 # write() 会阻塞到数据被消费，播放是按序连续的（真正的 FIFO）
                 data = np.ascontiguousarray(_apply_volume(pcm)).reshape(-1, 1)
                 stream.write(data)
+                if first_ready is None:
+                    first_ready = time.time()
         except Exception:
             # 被 stop() 打断（abort/close）或设备异常，正常退出
             pass
@@ -416,6 +435,7 @@ class TTS:
                 pass
             if self._stream is stream:
                 self._stream = None
+        return first_ready
 
     def _speak_sherpa_whole(self, text: str):
         """整段合成后一次播放（流式不可用时的回退）。"""
@@ -446,10 +466,14 @@ class TTS:
                     return
                 pcm = _mp3_to_pcm(mp3)
             elif use_stream:
-                self._speak_sherpa_stream(text)
-                t_synth_end = time.time()
+                first_ready = self._speak_sherpa_stream(text)
                 if _debug_timing:
-                    print(f"[timing] TTS首句合成 {t_synth_end - t_synth_start:.2f}s（流式）")
+                    t_done = time.time()
+                    if first_ready:
+                        print(f"[timing] TTS首句出声 {first_ready - t_synth_start:.2f}s | "
+                              f"整段播完 {t_done - t_synth_start:.2f}s（流式）")
+                    else:
+                        print(f"[timing] TTS流式播完 {t_done - t_synth_start:.2f}s")
                 return
             else:
                 pcm = self._sherpa.synthesize(text)

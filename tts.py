@@ -303,6 +303,7 @@ class TTS:
         self._stop_flag = threading.Event()
         self._play_lock = threading.Lock()
         self._current_pcm = None
+        self._stream = None  # 流式播放时持有的 OutputStream（供打断用）
         self._engine = config.TTS_ENGINE
 
         if self._engine == "edge":
@@ -323,6 +324,15 @@ class TTS:
     def stop(self):
         """打断当前播放，带平滑淡出。"""
         self._stop_flag.set()
+        # 若正在流式播放，立即中断输出流（不等待缓冲播完）
+        stream = self._stream
+        if stream is not None:
+            try:
+                stream.abort()
+                stream.close()
+            except Exception:
+                pass
+            self._stream = None
         pcm = self._current_pcm
         if pcm is not None and len(pcm) > 0:
             try:
@@ -339,35 +349,83 @@ class TTS:
         return self._playing
 
     def _speak_sherpa_stream(self, text: str):
-        """按句流式：逐句「合成 → 入队播放」，第一句最快出声。
+        """按句流式：逐句「合成 → 写入输出流」，第一句最快出声，句间无缝不中断。
 
-        sounddevice 的 sd.play(blocking=False) 多次调用会自动 FIFO 排队播放，
-        不需要 blocking=True / sd.wait() 逐句同步（那样会打断/覆盖前一句）。
-        正确做法：
-          - 每句合成完就 sd.play(blocking=False) 入队（立即返回，不阻塞）
-          - 全部入队后统一 sd.wait() 等播完
-          - 开头先 sd.stop() 清掉上一次可能残留的播放，再开始入队
-        全程单线程，无竞态，无 off-by-one，无「首句被覆盖」问题。
+        重要：sounddevice 的 sd.play(blocking=False) 每次调用都会先 stop() 掉
+        上一个流（源码注释明确「cannot be used for multiple overlapping playbacks」），
+        所以不能用多次 sd.play() 来排队——那样前一句会被下一句打断，
+        表现为「一段话说一半就没了、直接掉到下一句」。
+        正确做法：自建一个 OutputStream，逐句 stream.write()，数据按顺序真正串行播放。
         """
         sents = _split_sentences(text)
         if not sents:
             return
 
-        # 清掉上一次残留播放（在入队第一句之前做一次即可）
+        # 清掉上一次可能残留的播放
         sd.stop()
-        for s in sents:
-            if self._stop_flag.is_set():
-                break
-            pcm = self._sherpa.synthesize(s)
-            if self._stop_flag.is_set():
-                break
-            self._current_pcm = pcm
-            # 全部用 blocking=False 入队，靠 sounddevice 内部 FIFO 串行播放
-            sd.play(_apply_volume(pcm), self._sample_rate, blocking=False)
 
-        # 等整个播放队列播完（除非被用户打断）
-        if not self._stop_flag.is_set():
-            sd.wait()
+        stream = sd.OutputStream(
+            samplerate=self._sample_rate,
+            channels=1,
+            dtype="float32",
+        )
+        self._stream = stream
+        try:
+            stream.start()
+        except Exception as e:
+            # 打开流失败（极少见），退化为整段合成后一次播放
+            print(f"[tts] 流式播放打开失败，回退整段: {e}")
+            self._stream = None
+            try:
+                stream.close()
+            except Exception:
+                pass
+            self._speak_sherpa_whole(text)
+            return
+
+        try:
+            for s in sents:
+                if self._stop_flag.is_set():
+                    break
+                pcm = self._sherpa.synthesize(s)
+                if self._stop_flag.is_set():
+                    break
+                self._current_pcm = pcm
+                # write() 会阻塞到数据被消费，播放是按序连续的（真正的 FIFO）
+                data = np.ascontiguousarray(_apply_volume(pcm)).reshape(-1, 1)
+                stream.write(data)
+        except Exception:
+            # 被 stop() 打断（abort/close）或设备异常，正常退出
+            pass
+        finally:
+            if self._stop_flag.is_set():
+                # 用户打断：立即丢弃剩余缓冲
+                try:
+                    stream.abort()
+                except Exception:
+                    pass
+            else:
+                # 正常播完：stop() 会等待所有 pending 缓冲播完再返回
+                try:
+                    stream.stop()
+                except Exception:
+                    pass
+            try:
+                stream.close()
+            except Exception:
+                pass
+            if self._stream is stream:
+                self._stream = None
+
+    def _speak_sherpa_whole(self, text: str):
+        """整段合成后一次播放（流式不可用时的回退）。"""
+        pcm = self._sherpa.synthesize(text)
+        if self._stop_flag.is_set():
+            return
+        sd.stop()
+        self._current_pcm = pcm
+        sd.play(_apply_volume(pcm), self._sample_rate)
+        sd.wait()
 
     def speak_text(self, text: str):
         """朗读文本（阻塞直到读完）。默认按句流式，可配置整段。"""

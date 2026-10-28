@@ -1,5 +1,8 @@
 # ETS2 AI 副驾
 
+> 🇨🇳 **国内下载（推荐）**：https://gitee.com/kensai68/ets2-ai-copilot
+> GitHub（国外镜像）：https://github.com/tingliang/ets2-ai-copilot
+
 一个给《欧洲卡车模拟 2》(ETS2) 用的 AI 副驾，用 **DeepSeek** 做对话大脑，支持**中文语音输入 / 中文语音输出**。
 
 默认人设是**小满**——毒舌心软、爱卡车的陕西妹子。会陪你聊天、吐槽你的车技、主动报告路况事件（事故/超速/低油/罚款），还能记住你聊过的事。也支持切换成**高冷「阿澈」**等其他可配置人设。
@@ -42,7 +45,10 @@
 ```
 
 - 如果 `plugins` 文件夹不存在，**手动新建**
-- DLL 从官方仓库下载：[scs-sdk-plugin Releases](https://github.com/RenCloud/scs-sdk-plugin/releases)
+- **DLL 已随本项目附带**（不用再去 GitHub 下载）：
+  - 64 位游戏（99% 情况）用 `plugins\win_x64\scs-telemetry.dll`
+  - 32 位游戏（罕见）用 `plugins\win_x86\scs-telemetry.dll`
+- 把对应 DLL **复制**到上面的游戏目录即可（DLL 来自官方 [scs-sdk-plugin V.1.12.1](https://github.com/RenCloud/scs-sdk-plugin/releases)，安全）
 - **放置后必须重启游戏**才会加载插件
 - 不放置也能正常聊天，只是没有实时车况和事件播报
 
@@ -186,6 +192,8 @@ python main.py --debug-timing   # 看 STT/LLM/TTS 各段耗时
 
 ## 常见问题
 
+> 💡 **先说一句**：遇到报错不会弄？把报错信息（尤其是红色那几行）直接复制给 AI 助手——DeepSeek、Kimi、豆包、ChatGPT 都行——问「这段报错怎么解决」，能解决大半问题。这个项目本身就是 AI 搭的，别怕问 AI。
+
 **Q: 启动后 `[telemetry] 尚未连接`，事件不触发？**
 A: 确认 `scs-telemetry.dll` 在 `bin\win_x64\plugins\` 下，且游戏已重启并进入驾驶界面。用 `--debug-event` 看 `sdk=` 是否为 True。
 
@@ -224,6 +232,9 @@ ets2-ai-copilot/
 │   ├── xiaoman.md     # 小满（默认）
 │   └── gaoleng.md     # 阿澈（高冷）
 ├── docs/              # 需求文档、开发规范
+├── plugins/           # 官方 SCS Telemetry 插件 DLL（已随包附带）
+│   ├── win_x64/scs-telemetry.dll   # 64 位游戏用
+│   └── win_x86/scs-telemetry.dll   # 32 位游戏用
 ├── install.bat        # 一键安装（装依赖 + 下模型 + 生成配置）
 ├── start.bat          # 一键启动
 ├── setup_gpu_stt.bat  # GPU 识别配置脚本

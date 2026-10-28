@@ -11,8 +11,8 @@
 ## 功能一览
 
 - 🎤 **按住 Alt 说话**，松开即识别（本地 Whisper，中文）
-- 🗣️ **中文语音回答**（edge-tts，默认陕西小妮音色，免费）
-- ⚡ **GPU 加速识别**（可选，RTX 显卡识别从 ~1 秒降到 ~0.06 秒）
+- 🗣️ **中文语音回答**：默认**本地离线女声**（sherpa-onnx + 中文 VITS，国内零依赖、断网可用），也可切回 edge-tts「陕西小妮」
+- ⚡ **GPU 加速识别**（可选，`WHISPER_DEVICE=auto` 自动探测 N 卡，识别从 ~1 秒降到 ~0.06 秒）
 - 🎭 **可配置人设**：小满（毒舌）/ 阿澈（高冷），`PERSONA` 一键切换，可自行添加
 - 🎮 **语音控制指令**：说「打开收音机」「切台」「静音」即可控制游戏（本地执行，不耗 token）
 - 📡 **实时读取车况**（速度/档位/油量/限速/任务/坐标，通过官方 SCS Telemetry SDK）
@@ -27,7 +27,7 @@
 
 - **Windows**（遥测读共享内存依赖 Windows API）
 - **Python 3.11**（不要用 3.12+，部分依赖兼容性差）
-- **ffmpeg**（edge-tts 解码音频用，见下文安装）
+- **ffmpeg**（仅 `TTS_ENGINE=edge` 时解码音频用；默认 `sherpa` 引擎不需要）
 
 ---
 
@@ -151,15 +151,17 @@ python main.py --debug-timing   # 看 STT/LLM/TTS 各段耗时
 | `DEEPSEEK_MODEL` | 模型 | `deepseek-chat` |
 | `PERSONA` | 人设名（对应 `personas/<名>.md`） | `xiaoman` |
 | `WHISPER_MODEL` | 识别模型（越大越准越慢） | `base` |
-| `WHISPER_DEVICE` | 识别设备 `cpu` 或 `cuda` | `cpu` |
+| `WHISPER_DEVICE` | 识别设备 `auto` / `cpu` / `cuda` | `auto` |
 | `PTT_KEY` | 按住说话热键 | `alt` |
-| `TTS_VOICE` | 音色 | `zh-CN-shaanxi-XiaoniNeural` |
-| `TTS_RATE` | 语速 | `+0%` |
+| `TTS_ENGINE` | 语音引擎 `sherpa`（本地离线）/ `edge`（需联网） | `sherpa` |
+| `TTS_VOICE` | 音色（仅 edge 引擎生效） | `zh-CN-shaanxi-XiaoniNeural` |
+| `TTS_RATE` | 语速（仅 edge 引擎生效） | `+0%` |
+| `TTS_LOCAL_SPEED` | 本地引擎语速（越大越快） | `1.0` |
 | `TTS_VOLUME` | 音量 0~1 | `1.0` |
 
 热键支持：`alt` / `ctrl` / `shift` / `space` / `enter` / `tab` / 单个字母（如 `f`）。
 
-**可选音色**（`TTS_VOICE`）：
+**可选音色**（`TTS_VOICE`，仅 `TTS_ENGINE=edge` 时生效）：
 
 | 音色 ID | 特点 |
 |---------|------|
@@ -169,6 +171,8 @@ python main.py --debug-timing   # 看 STT/LLM/TTS 各段耗时
 | `zh-CN-YunxiNeural` | 年轻男声 |
 | `zh-CN-YunjianNeural` | 沉稳男声（适合高冷人设）|
 | `zh-CN-liaoning-XiaobeiNeural` | 东北口音女声 |
+
+> **默认 `sherpa` 引擎**用本地离线中文女声（vits-melo-tts-zh_en），不依赖上述音色表，首次运行自动从 ModelScope 下载模型（约 190MB）。想要「陕西小妮」等口音音色，把 `TTS_ENGINE` 改成 `edge`（需联网）。
 
 ---
 
@@ -199,8 +203,9 @@ ets2-ai-copilot/
 ├── telemetry.py       # 读 ETS2 共享内存（Windows API）
 ├── events.py          # 事件检测（事故/超速/低油/罚款等）
 ├── llm.py             # DeepSeek 对话 + 记忆 + 车况快照
-├── stt.py             # 本地中文语音识别（Whisper，支持 GPU）
-├── tts.py             # 中文朗读（edge-tts）
+├── stt.py             # 本地中文语音识别（Whisper，auto 自动探测 GPU）
+├── tts.py             # 中文朗读（双引擎：sherpa 本地离线 / edge 在线）
+├── test_tts.py        # 离线 TTS 音色试听脚本（第一关测试用）
 ├── commands.py        # 语音控制指令（模拟按键控制游戏）
 ├── config.py          # 配置加载 + 热键解析
 ├── personas/          # 人设文件（xiaoman.md / gaoleng.md 等）
@@ -217,7 +222,7 @@ ets2-ai-copilot/
 
 - **遥测**：通过 SCS 官方 Telemetry SDK 插件，把车况写入 Windows 命名共享内存 `Local\SCSTelemetry`，Python 用 `ctypes` 调 `OpenFileMappingW` 读取。
 - **对话**：DeepSeek 的 OpenAI 兼容接口，流式输出。
-- **语音输入**：本地 faster-whisper（不联网、不耗 DeepSeek token）；可选 GPU 加速。
-- **语音输出**：edge-tts（免费微软在线 TTS）。
+- **语音输入**：本地 faster-whisper（不联网、不耗 DeepSeek token）；`auto` 自动探测 GPU 加速。
+- **语音输出**：默认本地 sherpa-onnx + 中文 VITS（离线、国内零依赖、零成本）；可选 edge-tts（在线微软音）。
 - **语音指令**：本地关键词匹配 + pynput 模拟按键，不走 DeepSeek。
 - **省 token**：上下文超限自动压缩成摘要；事件评论限制 20 字；主动闲聊带冷却。

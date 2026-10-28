@@ -24,10 +24,19 @@ DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.co
 DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
 PERSONA = os.environ.get("PERSONA", "xiaoman")  # 人设名，对应 personas/<name>.md
 WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "base")
-WHISPER_DEVICE = os.environ.get("WHISPER_DEVICE", "cpu")  # cpu 或 cuda（cuda 需装 CUDA 运行时）
+# STT 设备：auto（自动探测，有 N 卡用 cuda，否则 cpu）/ cpu / cuda
+WHISPER_DEVICE = os.environ.get("WHISPER_DEVICE", "auto")
 PTT_KEY = os.environ.get("PTT_KEY", "alt")  # 按住说话热键，见下方支持列表
-TTS_VOICE = os.environ.get("TTS_VOICE", "zh-CN-shaanxi-XiaoniNeural")
-TTS_RATE = os.environ.get("TTS_RATE", "+0%")   # 语速，如 "+20%" 或 "-10%"
+
+# ---------- TTS 双引擎 ----------
+# TTS_ENGINE:
+#   sherpa —— 本地离线中文女声（vits-melo-tts-zh_en），国内零依赖、断网可用（默认，推荐）
+#   edge   —— 微软 edge-tts「陕西小妮」（需联网，境外接口，国内可能不稳定）
+TTS_ENGINE = os.environ.get("TTS_ENGINE", "sherpa").strip().lower()
+TTS_VOICE = os.environ.get("TTS_VOICE", "zh-CN-shaanxi-XiaoniNeural")  # 仅 edge 引擎生效
+TTS_RATE = os.environ.get("TTS_RATE", "+0%")   # 仅 edge 引擎生效，如 "+20%" / "-10%"
+TTS_LOCAL_MODEL_DIR = os.environ.get("TTS_LOCAL_MODEL_DIR", "")  # sherpa 模型目录（空=默认 models/vits-melo-tts-zh_en）
+TTS_LOCAL_SPEED = float(os.environ.get("TTS_LOCAL_SPEED", "1.0"))  # sherpa 语速，越大越快
 TTS_VOLUME = float(os.environ.get("TTS_VOLUME", "1.0"))  # 音量 0.0~1.0（1.0=原声）
 
 

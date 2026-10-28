@@ -67,10 +67,50 @@ def _setup_cuda_dll_path():
         print(f"[stt] 注册 CUDA DLL 目录失败（忽略）: {e}")
 
 
+def _detect_device() -> str:
+    """根据 config.WHISPER_DEVICE 决定实际用 cpu 还是 cuda。
+
+    - 显式 cpu / cuda：直接按配置。
+    - auto：自动探测是否有可用 N 卡（CUDA），有则 cuda，否则 cpu。
+    """
+    configured = (getattr(config, "WHISPER_DEVICE", "auto") or "auto").strip().lower()
+    if configured in ("cpu", "cuda"):
+        return configured
+
+    # auto 模式：探测 CUDA
+    # 1) 先看 ctranslate2 能否直接报 CUDA 支持（最轻量、最准）
+    try:
+        from ctranslate2 import get_cuda_device_count
+        if get_cuda_device_count() > 0:
+            return "cuda"
+    except Exception:
+        pass
+    # 2) 再看 torch（若装了）能否看到 CUDA
+    try:
+        import torch
+        if torch.cuda.is_available():
+            return "cuda"
+    except Exception:
+        pass
+    # 3) 兜底：检查环境里是否有 nvidia 驱动 DLL 目录（Windows）
+    if sys.platform == "win32":
+        try:
+            import site
+            for base in site.getsitepackages():
+                nvidia_root = os.path.join(base, "nvidia")
+                if os.path.isdir(nvidia_root):
+                    for entry in os.listdir(nvidia_root):
+                        if entry.startswith(("cublas", "cudnn", "cuda")):
+                            return "cuda"
+        except Exception:
+            pass
+    return "cpu"
+
+
 def _get_model():
     global _model
     if _model is None:
-        device = getattr(config, "WHISPER_DEVICE", "cpu") or "cpu"
+        device = _detect_device()
         # GPU 必须用 float16：RTX 50 系（Blackwell/sm_120）的 INT8 会报
         # CUBLAS_STATUS_NOT_SUPPORTED。CPU 用 int8 加速。
         compute = "float16" if device == "cuda" else "int8"

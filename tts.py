@@ -339,42 +339,36 @@ class TTS:
         return self._playing
 
     def _speak_sherpa_stream(self, text: str):
-        """按句流式：第一句合成完立即播放，之后「边播边合成」无空隙衔接。
+        """按句流式：逐句「合成 → 排队播放」，第一句最快出声。
 
-        用双缓冲流水线：
-          - 先合成第 1 句，立即 blocking=False 开播（用户此刻就听到声音）
-          - 之后每句：先合成第 N+1 句，再用 blocking=True 播第 N 句（等它播完），
-            此时第 N+1 句已就绪，下一轮直接播，无停顿。
-        全程单线程，无竞态；sd.stop() 可整体打断（stop_flag 检查）。
+        用 sounddevice 的播放队列天然串行（FIFO），逐句 blocking=True 会等
+        上一句播完再播下一句，全程单线程、无竞态、无 off-by-one：
+          - 第一句：blocking=False 立即开播（用户此刻就听到声音）
+          - 后续句：先合成，再 blocking=True 排队（等前句播完自动接着播）
+          - 最后一句也在循环里播，不会丢。
         """
         sents = _split_sentences(text)
         if not sents:
             return
 
-        # 合成第一句并立即开播（关键：最小化「听到声音」的延迟）
-        if self._stop_flag.is_set():
-            return
-        pcm_next = self._sherpa.synthesize(sents[0])
-        if self._stop_flag.is_set():
-            return
-        sd.stop()
-        self._current_pcm = pcm_next
-        sd.play(_apply_volume(pcm_next), self._sample_rate, blocking=False)
-
-        # 流水线：提前合成下一句，再播当前句
-        for i in range(1, len(sents)):
+        first = True
+        for s in sents:
             if self._stop_flag.is_set():
                 break
-            # 提前合成下一句（在播放当前句期间进行）
-            pcm = pcm_next
-            pcm_next = self._sherpa.synthesize(sents[i])
+            pcm = self._sherpa.synthesize(s)
             if self._stop_flag.is_set():
                 break
-            # 播当前句（blocking=True 等它播完，下一句已就绪）
             self._current_pcm = pcm
-            sd.play(_apply_volume(pcm), self._sample_rate, blocking=True)
+            if first:
+                # 第一句：清空旧播放，立即开播（不阻塞）
+                sd.stop()
+                sd.play(_apply_volume(pcm), self._sample_rate, blocking=False)
+                first = False
+            else:
+                # 后续句：blocking=True 等前句播完再播这句（无缝衔接）
+                sd.play(_apply_volume(pcm), self._sample_rate, blocking=True)
 
-        # 等最后一句播完
+        # 等最后一帧播完（除非被用户打断）
         if not self._stop_flag.is_set():
             sd.wait()
 

@@ -339,19 +339,22 @@ class TTS:
         return self._playing
 
     def _speak_sherpa_stream(self, text: str):
-        """按句流式：逐句「合成 → 排队播放」，第一句最快出声。
+        """按句流式：逐句「合成 → 入队播放」，第一句最快出声。
 
-        用 sounddevice 的播放队列天然串行（FIFO），逐句 blocking=True 会等
-        上一句播完再播下一句，全程单线程、无竞态、无 off-by-one：
-          - 第一句：blocking=False 立即开播（用户此刻就听到声音）
-          - 后续句：先合成，再 blocking=True 排队（等前句播完自动接着播）
-          - 最后一句也在循环里播，不会丢。
+        sounddevice 的 sd.play(blocking=False) 多次调用会自动 FIFO 排队播放，
+        不需要 blocking=True / sd.wait() 逐句同步（那样会打断/覆盖前一句）。
+        正确做法：
+          - 每句合成完就 sd.play(blocking=False) 入队（立即返回，不阻塞）
+          - 全部入队后统一 sd.wait() 等播完
+          - 开头先 sd.stop() 清掉上一次可能残留的播放，再开始入队
+        全程单线程，无竞态，无 off-by-one，无「首句被覆盖」问题。
         """
         sents = _split_sentences(text)
         if not sents:
             return
 
-        first = True
+        # 清掉上一次残留播放（在入队第一句之前做一次即可）
+        sd.stop()
         for s in sents:
             if self._stop_flag.is_set():
                 break
@@ -359,16 +362,10 @@ class TTS:
             if self._stop_flag.is_set():
                 break
             self._current_pcm = pcm
-            if first:
-                # 第一句：清空旧播放，立即开播（不阻塞）
-                sd.stop()
-                sd.play(_apply_volume(pcm), self._sample_rate, blocking=False)
-                first = False
-            else:
-                # 后续句：blocking=True 等前句播完再播这句（无缝衔接）
-                sd.play(_apply_volume(pcm), self._sample_rate, blocking=True)
+            # 全部用 blocking=False 入队，靠 sounddevice 内部 FIFO 串行播放
+            sd.play(_apply_volume(pcm), self._sample_rate, blocking=False)
 
-        # 等最后一帧播完（除非被用户打断）
+        # 等整个播放队列播完（除非被用户打断）
         if not self._stop_flag.is_set():
             sd.wait()
 

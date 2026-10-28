@@ -36,11 +36,25 @@ _sample_rate = 24000  # edge 引擎播放采样率（edge-tts 输出 24k）
 
 
 def _apply_volume(pcm: np.ndarray) -> np.ndarray:
-    """按 config.TTS_VOLUME 缩放音量（0.0~1.0，1.0=原声）。"""
+    """按 config.TTS_VOLUME 缩放音量。1.0=原声，>1.0 放大、<1.0 减小，自动防削波。"""
     vol = config.TTS_VOLUME
-    if vol >= 1.0:
+    if vol == 1.0:
         return pcm
-    return (pcm * vol).astype(np.float32)
+    return np.clip(pcm * vol, -1.0, 1.0).astype(np.float32)
+
+
+def _normalize_loudness(pcm: np.ndarray, target_peak: float = 0.95, max_gain: float = 6.0) -> np.ndarray:
+    """响度归一化：把峰值拉到 target_peak（防太小声/太大声），但增益不超过 max_gain。
+
+    离线 VITS 输出响度偏低（峰值约 0.18），这里归一化到接近满幅，让音量对齐 edge 引擎。
+    """
+    if len(pcm) == 0:
+        return pcm
+    peak = float(np.max(np.abs(pcm)))
+    if peak < 1e-6:
+        return pcm
+    gain = min(target_peak / peak, max_gain)
+    return (pcm * gain).astype(np.float32)
 
 
 # ==================== sherpa 本地引擎 ====================
@@ -180,7 +194,13 @@ class _SherpaTTS:
         self.sample_rate = 44100
 
     def synthesize(self, text: str) -> np.ndarray:
-        """合成文本，返回 float32 PCM（单声道，44.1k）。"""
+        """合成文本，返回 float32 PCM（单声道，44.1k）。
+
+        做了两处后处理：
+        1. 句首垫一小段静音（config.TTS_LOCAL_LEAD_SILENCE），
+           避免播放设备起音延迟把第一个字的音头吞掉。
+        2. 响度归一化，对齐 edge 引擎音量。
+        """
         # 兼容新旧版 sherpa-onnx 的调用方式
         try:
             gen = self._sherpa_onnx.GenerationConfig()
@@ -188,7 +208,16 @@ class _SherpaTTS:
             audio = self._tts.generate(text, gen)
         except (AttributeError, TypeError):
             audio = self._tts.generate(text, sid=0, speed=config.TTS_LOCAL_SPEED)
-        return np.asarray(audio.samples, dtype=np.float32)
+        pcm = np.asarray(audio.samples, dtype=np.float32)
+
+        # 1) 句首静音
+        lead = int(self.sample_rate * config.TTS_LOCAL_LEAD_SILENCE)
+        if lead > 0:
+            pcm = np.concatenate([np.zeros(lead, dtype=np.float32), pcm])
+
+        # 2) 响度归一化
+        pcm = _normalize_loudness(pcm)
+        return pcm
 
 
 # ==================== edge 引擎 ====================

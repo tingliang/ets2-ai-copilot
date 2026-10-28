@@ -37,7 +37,8 @@ TTS_VOICE = os.environ.get("TTS_VOICE", "zh-CN-shaanxi-XiaoniNeural")  # 仅 edg
 TTS_RATE = os.environ.get("TTS_RATE", "+0%")   # 仅 edge 引擎生效，如 "+20%" / "-10%"
 TTS_LOCAL_MODEL_DIR = os.environ.get("TTS_LOCAL_MODEL_DIR", "")  # sherpa 模型目录（空=默认 models/vits-melo-tts-zh_en）
 TTS_LOCAL_SPEED = float(os.environ.get("TTS_LOCAL_SPEED", "1.0"))  # sherpa 语速，越大越快
-TTS_VOLUME = float(os.environ.get("TTS_VOLUME", "1.0"))  # 音量 0.0~1.0（1.0=原声）
+TTS_LOCAL_LEAD_SILENCE = float(os.environ.get("TTS_LOCAL_LEAD_SILENCE", "0.12"))  # 句首静音秒数（防首字被吞）
+TTS_VOLUME = float(os.environ.get("TTS_VOLUME", "1.0"))  # 音量，可 >1.0 放大（自动防削波）
 
 
 # ---------- 热键解析 ----------

@@ -43,7 +43,7 @@ def _apply_volume(pcm: np.ndarray) -> np.ndarray:
     return np.clip(pcm * vol, -1.0, 1.0).astype(np.float32)
 
 
-def _normalize_loudness(pcm: np.ndarray, target_peak: float = 0.95, max_gain: float = 6.0) -> np.ndarray:
+def _normalize_loudness(pcm: np.ndarray, target_peak: float = 0.75, max_gain: float = 6.0) -> np.ndarray:
     """响度归一化：把峰值拉到 target_peak（防太小声/太大声），但增益不超过 max_gain。
 
     离线 VITS 输出响度偏低（峰值约 0.18），这里归一化到接近满幅，让音量对齐 edge 引擎。

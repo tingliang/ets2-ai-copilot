@@ -90,9 +90,10 @@ def main():
     # 打开本地 HTML。透明窗口关键参数：
     #   frameless=True      无边框
     #   on_top=True         置顶
-    #   transparent=True    透明背景
+    #   transparent=True    透明背景（EdgeChromium 后端会直接把窗口背景设为 Transparent）
     #   easy_drag=True      可直接拖动
-    #   background_color 透明时必须设为 #00000000 或类似透明色
+    #   background_color    仅作为「页面加载前」的占位色，必须是 6 位 hex（#RRGGBB），
+    #                       不能带 alpha（8 位），否则 pywebview 6.x 会抛 ValueError
     window = webview.create_window(
         "ETS2 AI 副驾·桌宠",
         url=html_path,
@@ -103,7 +104,7 @@ def main():
         on_top=True,
         transparent=True,
         easy_drag=True,
-        background_color="#00000000",
+        background_color="#000000",
         resizable=False,
     )
 

@@ -168,6 +168,7 @@
 
     let app = null;          // PIXI Application
     let live2dModel = null;  // Live2DModel 实例
+    let currentModelPath = null; // 加载成功的模型 model3.json 路径
     let isSpeaking = false;
     let mouthOpen = 0;       // 0~1 嘴部开合
     let bubbleTimer = null;
@@ -197,7 +198,9 @@
       let model = null;
       for (const path of MODEL_CANDIDATES) {
         try {
-          model = await Live2DModel.from(path);
+          // motionPreload: 'ALL' 预加载全部动作文件，避免第一次播放时现读文件导致「没反应」
+          model = await Live2DModel.from(path, { motionPreload: "ALL" });
+          currentModelPath = path;
           console.log("[pet] 模型加载成功:", path);
           break;
         } catch (e) {
@@ -240,15 +243,18 @@
     let motionGroups = [];      // 可用动作组名
     let expressionNames = [];   // 可用表情名
 
-    function dumpModelAssets() {
+    // 直接解析 model3.json 拿动作分组与表情名（运行时内部 API 版本不稳，不走它）
+    async function dumpModelAssets() {
+      if (!currentModelPath) return;
       try {
-        const mm = live2dModel.internalModel.motionManager;
-        const em = live2dModel.internalModel.expressionManager;
-        motionGroups = Object.keys(mm.definitions || {});
-        expressionNames = Object.keys(em.definitions || {});
+        const res = await fetch(currentModelPath);
+        const json = await res.json();
+        const fr = json.FileReferences || {};
+        motionGroups = Object.keys(fr.Motions || {});
+        expressionNames = (fr.Expressions || []).map(e => e.Name).filter(Boolean);
         console.log("[pet] 可用动作组:", motionGroups);
-        console.log("[pet] 可用表情:", expressionNames);
-      } catch (e) { console.warn("[pet] 读取动作/表情失败:", e); }
+        console.log("[pet] 可用表情:", expressionNames.length, "个");
+      } catch (e) { console.warn("[pet] 解析 model3.json 失败:", e); }
     }
 
     // 播放一个动作（group 名 + 可选 index）
@@ -310,10 +316,16 @@
     document.addEventListener("contextmenu", (ev) => {
       ev.preventDefault();
       ev.stopPropagation();
-      const mw = menuEl.offsetWidth, mh = menuEl.offsetHeight;
-      menuEl.style.left = Math.min(ev.clientX, window.innerWidth - mw - 4) + "px";
-      menuEl.style.top = Math.min(ev.clientY, window.innerHeight - mh - 4) + "px";
+      // 先显示（否则 offsetWidth/Height 测出来是 0），再定位并夹紧到窗口内
+      menuEl.style.visibility = "hidden";
       menuEl.style.display = "block";
+      const mw = menuEl.offsetWidth, mh = menuEl.offsetHeight;
+      let x = ev.clientX, y = ev.clientY;
+      if (x + mw > window.innerWidth - 4) x = window.innerWidth - mw - 4;
+      if (y + mh > window.innerHeight - 4) y = window.innerHeight - mh - 4;
+      menuEl.style.left = Math.max(4, x) + "px";
+      menuEl.style.top = Math.max(4, y) + "px";
+      menuEl.style.visibility = "visible";
     });
     // 点击其他地方 / 拖动开始时关闭菜单
     document.addEventListener("mousedown", (ev) => {

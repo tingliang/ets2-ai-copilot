@@ -82,25 +82,42 @@ class PetBridge:
             return False
 
     def stop(self):
-        """关闭桌宠：先优雅发 quit，超时则强杀。"""
-        if self._proc is None:
+        """关闭桌宠：先优雅发 quit，超时则强杀，最后确保进程句柄释放。
+
+        注意顺序：terminate()/kill() 只是发出信号，必须再 wait() 才能
+        让子进程被回收（否则会残留僵尸句柄）。所有操作都要 try 包裹，
+        避免 Ctrl+C 退出时二次抛异常。
+        """
+        proc = self._proc
+        if proc is None:
             return
+        self._proc = None
         try:
             self.push({"type": "quit"})
-            try:
-                self._proc.stdin.close()
-            except Exception:
-                pass
         except Exception:
             pass
         try:
-            self._proc.wait(timeout=3)
+            proc.stdin.close()
+        except Exception:
+            pass
+        try:
+            proc.wait(timeout=3)
         except Exception:
             try:
-                self._proc.terminate()
+                proc.terminate()
             except Exception:
                 pass
-        self._proc = None
+            try:
+                proc.wait(timeout=3)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+                try:
+                    proc.wait(timeout=3)
+                except Exception:
+                    pass
 
     # ---------- 事件推送 ----------
     def push(self, event: dict):

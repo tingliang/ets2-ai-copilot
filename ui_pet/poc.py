@@ -111,48 +111,6 @@ def _apply_chroma_key_retry(window, tries=20, interval=0.5):
     print("[pet] 色键透明设置失败（重试超时，背景会显示为品红色）")
 
 
-def _keep_topmost(window, stop_event):
-    """后台保活：把桌宠窗口持续钉在最顶层，且点击时不抢游戏焦点。
-
-    场景：ETS2 用「无边框窗口」模式时，普通置顶窗口仍可能被游戏反复
-    抢占；这里每秒用 SetWindowPos(HWND_TOPMOST) 重新置顶（用 SWP_NOACTIVATE
-    标志避免每次置顶时抢走游戏焦点，但不动窗口的扩展样式，保证窗口正常显示）。
-
-    注意：若游戏是「独占全屏(exclusive fullscreen)」，Windows 会把整块
-    屏幕交给游戏独占渲染，任何窗口都无法盖上去——这种情况请把游戏显示
-    模式改成「无边框窗口 / borderless windowed」。
-    """
-    user32 = ctypes.windll.user32
-    HWND_TOPMOST = -1
-    SWP_NOSIZE = 0x0001
-    SWP_NOMOVE = 0x0002
-    SWP_NOACTIVATE = 0x0010
-    SWP_SHOWWINDOW = 0x0040
-
-    # 等窗口句柄就绪（GUI 循环启动后异步可用）
-    hwnd = None
-    for _ in range(60):
-        hwnd = _get_hwnd(window)
-        if hwnd:
-            break
-        time.sleep(0.25)
-    if not hwnd:
-        print("[pet] 未拿到窗口句柄，置顶保活未启动")
-        return
-
-    print("[pet] 置顶保活已启动（每 1 秒重新置顶）")
-    while not stop_event.is_set():
-        try:
-            # 只重钉最顶层 + 不抢激活，不再动窗口扩展样式
-            user32.SetWindowPos(
-                hwnd, HWND_TOPMOST, 0, 0, 0, 0,
-                SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
-            )
-        except Exception:
-            pass
-        time.sleep(1.0)
-
-
 def _asset(name: str) -> str:
     return os.path.join(ROOT, name)
 
@@ -232,7 +190,6 @@ def main():
     threading.Thread(target=stdin_reader, args=(api,), daemon=True).start()
 
     html_path = _asset("pet.html")
-    stop_topmost = threading.Event()  # 置顶保活线程的停止开关（守护线程，随进程退出）
 
     # 窗口形态自动选择：
     #   1. 装了 PySide6 → Qt 后端透明窗口（Qt 的 WA_TranslucentBackground
@@ -243,6 +200,16 @@ def main():
         use_qt = True
     except ImportError:
         use_qt = False
+
+    def on_ready():
+        # 窗口真正创建并显示后，才启动「置顶保活」线程。
+        # 关键：不能在 webview.start() 之前就起线程——那时窗口还没创建，
+        # 反复 SetWindowPos 会干扰窗口初始化，导致窗口不显示。
+        from win32helpers import ensure_topmost  # 见下方，同目录工具函数
+        try:
+            ensure_topmost(window)
+        except Exception as e:
+            print(f"[pet] 置顶设置失败（不影响显示）: {e}")
 
     if use_qt:
         print("[pet] 使用 Qt 后端：透明窗口模式")
@@ -261,10 +228,7 @@ def main():
             background_color="#000000",
             resizable=False,
         )
-        # 置顶保活：盖在游戏上面 + 点击不抢游戏焦点
-        threading.Thread(target=_keep_topmost,
-                         args=(window, stop_topmost), daemon=True).start()
-        webview.start(gui="qt")
+        webview.start(on_ready, gui="qt")
     else:
         print("[pet] 未安装 PySide6，使用卡片窗模式（想要透明窗口请: pip install PySide6）")
         mode = "card"
@@ -282,10 +246,7 @@ def main():
             background_color="#1B1B2A",
             resizable=False,
         )
-        # 置顶保活：盖在游戏上面 + 点击不抢游戏焦点
-        threading.Thread(target=_keep_topmost,
-                         args=(window, stop_topmost), daemon=True).start()
-        webview.start()
+        webview.start(on_ready)
 
 
 if __name__ == "__main__":

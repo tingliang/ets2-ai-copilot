@@ -8,18 +8,15 @@
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body {
     width: 100%; height: 100%;
-    /* 默认透明背景（Qt 透明窗口模式）；卡片模式由 .card-mode 切换 */
     background: transparent;
     overflow: hidden;
     font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
     user-select: none;
   }
-  /* 卡片模式（无 PySide6 时的兜底形态）：深色渐变圆角 */
   body.card-mode {
     background: linear-gradient(160deg, #232338 0%, #1B1B2A 55%, #14141f 100%);
     border-radius: 20px;
   }
-  /* 整个窗口可拖动（pywebview 官方拖动区域） */
   .pywebview-drag-region { }
   #stage { position: absolute; inset: 0; }
   #stage canvas { display: block; }
@@ -60,7 +57,9 @@
   #menu {
     position: fixed;
     display: none;
-    min-width: 150px;
+    min-width: 168px;
+    max-height: 92vh;
+    overflow-y: auto;
     background: rgba(30, 30, 46, 0.97);
     border: 1px solid rgba(255, 255, 255, 0.12);
     border-radius: 12px;
@@ -79,6 +78,7 @@
     padding: 7px 12px;
     border-radius: 8px;
     cursor: pointer;
+    white-space: nowrap;
   }
   #menu .menu-item:hover { background: rgba(255, 255, 255, 0.12); }
   #menu .menu-item.active { color: #7ab8ff; }
@@ -101,6 +101,10 @@
     border-radius: 7px;
     pointer-events: none;
     z-index: 10;
+    max-width: 92%;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 </style>
 </head>
@@ -108,25 +112,11 @@
   <div id="stage" class="pywebview-drag-region"></div>
   <div id="bubble"></div>
   <div id="status">加载中…</div>
-
-  <!-- 右键菜单 -->
-  <div id="menu">
-    <div class="menu-title">动作</div>
-    <div class="menu-item" data-motion="Hammer">🔨 挥锤子</div>
-    <div class="menu-item" data-motion="BubbleGum">🫧 吹泡泡</div>
-    <div class="menu-item" data-motion="SprayWater">💦 喷水</div>
-    <div class="menu-item" data-motion="Selfie">🤳 自拍</div>
-    <div class="menu-item" data-motion="Ketchup">🍅 挤番茄酱</div>
-    <div class="menu-item" data-motion="OpenCase">📦 开盖</div>
-    <div class="menu-item" data-motion="Idle">😴 待机</div>
-    <div class="menu-sep"></div>
-    <div class="menu-item danger" id="menu-quit">✕ 退出</div>
-  </div>
+  <div id="menu"></div>
 
   <!-- pixi.js（本地优先，CDN 兜底） -->
   <script src="./vendor/pixi.min.js"></script>
   <script>
-    // 本地 pixi 没加载成功则回退 CDN
     if (typeof PIXI === "undefined") {
       document.write('<script src="https://cdn.jsdelivr.net/npm/pixi.js@6.5.10/dist/browser/pixi.min.js"><\/script>');
     }
@@ -156,26 +146,47 @@
   </script>
 
   <script>
-    // ============ 配置 ============
-    // 模型候选列表（按顺序尝试，第一个加载成功的生效）
-    // 1. DS 鲸鱼娘：DeepSeek 鲸鱼娘二创（B站@氵六青 制作，CC BY-NC-SA 4.0，免费非商业）
-    // 2. Hiyori / 3. Haru：Live2D 官方免费示例模型
-    const MODEL_CANDIDATES = [
-      "./models/WhaleGirl/c_0120.model3.json",
-      "./models/Hiyori/Hiyori.model3.json",
-      "./models/Haru/Haru.model3.json",
+    // ============ 模型注册表（可切换形象清单） ============
+    const MODEL_REGISTRY = [
+      { id: "WhaleGirl", name: "鲸鱼娘",     emoji: "🐳", path: "./models/WhaleGirl/c_0120.model3.json" },
+      { id: "Mao",       name: "Mao 猫娘",   emoji: "🐱", path: "./models/Mao/Mao.model3.json" },
+      { id: "Natori",    name: "Natori",     emoji: "🌸", path: "./models/Natori/Natori.model3.json" },
+      { id: "Hiyori",    name: "Hiyori",     emoji: "🎀", path: "./models/Hiyori/Hiyori.model3.json" },
+      { id: "Haru",      name: "Haru",       emoji: "💙", path: "./models/Haru/Haru.model3.json" },
+      { id: "Ren",       name: "Ren",        emoji: "✨", path: "./models/Ren/Ren.model3.json" },
+      { id: "Rice",      name: "Rice 米团子", emoji: "🍙", path: "./models/Rice/Rice.model3.json" },
+      { id: "Wanko",     name: "Wanko 小狗", emoji: "🐶", path: "./models/Wanko/Wanko.model3.json" },
+      { id: "Mark",      name: "Mark",       emoji: "👦", path: "./models/Mark/Mark.model3.json" },
     ];
 
-    let app = null;          // PIXI Application
-    let live2dModel = null;  // Live2DModel 实例
-    let currentModelPath = null; // 加载成功的模型 model3.json 路径
+    // 动作组名 → 中文显示名 / emoji（未知组名自动用原名兜底）
+    const MOTION_LABELS = {
+      "Idle": "待机", "TapBody": "互动（摸头）",
+      "Hammer": "挥锤子", "BubbleGum": "吹泡泡", "SprayWater": "喷水",
+      "Selfie": "自拍", "SelfieQuick": "自拍（快）", "Ketchup": "挤番茄酱", "OpenCase": "开盖",
+    };
+    const MOTION_EMOJIS = {
+      "Idle": "😴", "TapBody": "👋", "Hammer": "🔨", "BubbleGum": "🫧",
+      "SprayWater": "💦", "Selfie": "🤳", "SelfieQuick": "🤳", "Ketchup": "🍅", "OpenCase": "📦",
+    };
+
+    let app = null;              // PIXI Application
+    let live2dModel = null;      // Live2DModel 实例
+    let currentModelId = null;   // 当前模型 id
     let isSpeaking = false;
-    let mouthOpen = 0;       // 0~1 嘴部开合
+    let mouthOpen = 0;
+    let lipParam = null;         // 嘴型参数名（随模型自适应）
     let bubbleTimer = null;
+    let idleTimer = null;
+
+    let motionGroups = [];       // 当前模型可用动作组名
+    let expressionNames = [];    // 当前模型可用表情名
+    let lastManualTime = 0;      // 手动选动作后暂停轮播一段时间
 
     const stage = document.getElementById("stage");
     const bubble = document.getElementById("bubble");
     const statusEl = document.getElementById("status");
+    const menuEl = document.getElementById("menu");
 
     function setStatus(t) { statusEl.textContent = t; }
 
@@ -183,7 +194,7 @@
     function initPixi() {
       app = new PIXI.Application({
         view: document.createElement("canvas"),
-        backgroundAlpha: 0,          // 透明背景
+        backgroundAlpha: 0,
         autoStart: true,
         resizeTo: stage,
         antialias: true,
@@ -191,143 +202,179 @@
       stage.appendChild(app.view);
     }
 
-    // ============ 加载 Live2D 模型 ============
-    async function loadModel() {
+    // ============ 加载指定模型 ============
+    async function loadModel(path, modelId) {
       const { Live2DModel } = PIXI.live2d;
       setStatus("加载模型…");
-      let model = null;
-      for (const path of MODEL_CANDIDATES) {
-        try {
-          // motionPreload: 'ALL' 预加载全部动作文件，避免第一次播放时现读文件导致「没反应」
-          model = await Live2DModel.from(path, { motionPreload: "ALL" });
-          currentModelPath = path;
-          console.log("[pet] 模型加载成功:", path);
-          break;
-        } catch (e) {
-          console.warn("[pet] 模型不可用:", path, e);
-        }
-      }
-      if (!model) {
-        setStatus("无可用模型（检查 models/ 目录）");
-        throw new Error("所有模型候选都加载失败");
+      // 先加载新模型，成功后再替换旧的（失败不破坏当前显示）
+      const model = await Live2DModel.from(path, { motionPreload: "ALL" });
+      if (live2dModel) {
+        try { app.stage.removeChild(live2dModel); live2dModel.destroy(); } catch (e) {}
       }
       live2dModel = model;
+      currentModelId = modelId;
       app.stage.addChild(model);
 
-      // ===== 布局（想调人物大小/位置改这里）=====
-      // 展示全身：让整个模型（含脚）都收进窗口，顶部留出气泡空间
-      const bubbleSpace = 0.14;                          // 顶部留 14% 高度给气泡
+      layoutModel();
+      updateBubblePosition();
+      await dumpModelAssets(path);
+      buildMenu();
+
+      const name = (MODEL_REGISTRY.find(x => x.id === modelId) || {}).name || modelId;
+      setStatus("✓ " + name);
+      console.log("[pet] 模型已加载:", name, "动作组:", motionGroups);
+      startIdleShowcase();
+    }
+
+    function layoutModel() {
+      const model = live2dModel;
+      const bubbleSpace = 0.14;
       const availableH = app.view.height * (1 - bubbleSpace);
       const availableW = app.view.width * 0.96;
       const scale = Math.min(availableW / model.width, availableH / model.height);
       model.scale.set(scale);
-      model.anchor.set(0.5, 0.5);                        // 以中心为锚，等比例缩放不偏移
+      model.anchor.set(0.5, 0.5);
       model.x = app.view.width / 2;
       model.y = app.view.height * (bubbleSpace + (1 - bubbleSpace) / 2);
-
-      // 气泡贴头：把字幕气泡定位到人物头顶
-      updateBubblePosition();
-      window.addEventListener("resize", updateBubblePosition);
-
-      setStatus("模型已加载 ✓");
-
-      // 呼吸参数（模型自带呼吸，此处留空）
-      startMouthLoop();
-
-      // 打印可用动作/表情（调试用），并启动「可爱动作自动轮播」
-      dumpModelAssets();
-      startIdleShowcase();
     }
 
-    // ============ 动作 & 表情（鲸鱼娘自带 8 动作 + 44 表情） ============
-    let motionGroups = [];      // 可用动作组名
-    let expressionNames = [];   // 可用表情名
-
-    // 直接解析 model3.json 拿动作分组与表情名（运行时内部 API 版本不稳，不走它）
-    async function dumpModelAssets() {
-      if (!currentModelPath) return;
+    // ============ 解析动作 / 表情 / 嘴型参数 ============
+    async function dumpModelAssets(path) {
+      motionGroups = [];
+      expressionNames = [];
+      lipParam = null;
       try {
-        const res = await fetch(currentModelPath);
+        const res = await fetch(path);
         const json = await res.json();
         const fr = json.FileReferences || {};
         motionGroups = Object.keys(fr.Motions || {});
         expressionNames = (fr.Expressions || []).map(e => e.Name).filter(Boolean);
-        console.log("[pet] 可用动作组:", motionGroups);
-        console.log("[pet] 可用表情:", expressionNames.length, "个");
+        const lip = (json.Groups || []).find(g => g.Name === "LipSync");
+        lipParam = (lip && lip.Ids && lip.Ids[0]) || null;
+        console.log("[pet] 动作组:", motionGroups, "| 表情:", expressionNames.length, "个 | 嘴型参数:", lipParam);
       } catch (e) { console.warn("[pet] 解析 model3.json 失败:", e); }
     }
 
-    // 播放一个动作（group 名 + 可选 index）
-    let lastManualTime = 0;   // 手动选动作后暂停轮播一段时间
+    // ============ 播放动作 / 切换表情 ============
     function playMotion(group, index, manual) {
       if (!live2dModel || !group) return;
       try {
-        // 关键诊断：监听 motion 加载错误 + 直接拿 Promise 结果
-        const mm = live2dModel.internalModel.motionManager;
-        // 打印当前 definitions 的 key（确认真实分组名）
-        if (!window.__defsLogged) {
-          window.__defsLogged = true;
-          console.log("[pet] definitions keys:", Object.keys(mm.definitions || {}));
-          console.log("[pet] motionGroups:", JSON.stringify(mm.motionGroups || {}));
-        }
         const ok = live2dModel.motion(group, index);
         if (ok && ok.then) {
           ok.then(started => {
-            setStatus((started ? "▶ " : "✗ ") + group + (started ? "" : "（播放失败）"));
-            if (!started) console.warn("[pet] motion 返回 false:", group, "definitions有?", !!mm.definitions?.[group]);
-          }).catch(err => {
-            setStatus("✗ " + group + "（异常）");
-            console.error("[pet] motion 异常:", group, err);
-          });
-        } else {
-          setStatus("▶ " + group);
+            if (!started) console.warn("[pet] motion 未启动:", group);
+          }).catch(err => console.error("[pet] motion 异常:", group, err));
         }
         if (manual) lastManualTime = Date.now();
       } catch (e) { console.error("[pet] 播放动作异常:", group, e); }
     }
 
-    // 切换表情（name 或 null 复位）
     function setExpression(name) {
       if (!live2dModel) return;
-      try {
-        live2dModel.expression(name);
-      } catch (e) { console.warn("[pet] 切换表情失败:", name, e); }
+      try { live2dModel.expression(name); }
+      catch (e) { console.warn("[pet] 切换表情失败:", name, e); }
     }
 
-    // 可爱动作轮播：轮流播放各种互动动作 + 搭配表情（POC 演示用）
-    const SHOWCASE = [
-      { motion: "Hammer",      expr: "开心兴奋" },
-      { motion: "BubbleGum",   expr: "爱心眼" },
-      { motion: "SprayWater",  expr: "星星眼" },
-      { motion: "Selfie",      expr: "脸红" },
-      { motion: "Ketchup",     expr: "开心兴奋" },
-      { motion: "OpenCase",    expr: "心跳" },
-    ];
-    let showcaseIdx = 0;
+    // 可爱动作轮播：循环播放当前模型的动作组（切换模型后自动适配）
     function startIdleShowcase() {
+      if (idleTimer) clearTimeout(idleTimer);
+      let idx = 0;
       function loop() {
         const manualPaused = Date.now() - lastManualTime < 15000;
-        if (live2dModel && !isSpeaking && !manualPaused) {
-          const item = SHOWCASE[showcaseIdx % SHOWCASE.length];
-          // 表情匹配：优先用模型里真实存在的名字
-          if (item.expr && expressionNames.length) {
-            const hit = expressionNames.find(n => n === item.expr);
-            setExpression(hit || item.expr);
-          }
-          playMotion(item.motion);
-          showcaseIdx++;
+        if (live2dModel && !isSpeaking && !manualPaused && motionGroups.length) {
+          playMotion(motionGroups[idx % motionGroups.length]);
+          idx++;
         }
-        setTimeout(loop, 6000);  // 每 6 秒换一个动作
+        idleTimer = setTimeout(loop, 6000);
       }
-      setTimeout(loop, 3000);
+      idleTimer = setTimeout(loop, 3000);
     }
 
-    // ============ 右键菜单（选动作 / 退出） ============
-    const menuEl = document.getElementById("menu");
+    // ============ 右键菜单（动态生成） ============
+    function buildMenu() {
+      menuEl.innerHTML = "";
+
+      // 动作区
+      const t1 = document.createElement("div");
+      t1.className = "menu-title";
+      t1.textContent = "动作";
+      menuEl.appendChild(t1);
+
+      if (motionGroups.length) {
+        motionGroups.forEach(g => {
+          const item = document.createElement("div");
+          item.className = "menu-item";
+          item.dataset.motion = g;
+          item.textContent = (MOTION_EMOJIS[g] || "🎬") + " " + (MOTION_LABELS[g] || g);
+          item.addEventListener("click", () => {
+            menuEl.style.display = "none";
+            setExpression(null);
+            playMotion(g, undefined, true);
+          });
+          menuEl.appendChild(item);
+        });
+      } else {
+        const none = document.createElement("div");
+        none.className = "menu-title";
+        none.textContent = "（无动作）";
+        menuEl.appendChild(none);
+      }
+
+      const sep1 = document.createElement("div");
+      sep1.className = "menu-sep";
+      menuEl.appendChild(sep1);
+
+      // 切换形象区
+      const t2 = document.createElement("div");
+      t2.className = "menu-title";
+      t2.textContent = "切换形象";
+      menuEl.appendChild(t2);
+
+      MODEL_REGISTRY.forEach(m => {
+        const item = document.createElement("div");
+        item.className = "menu-item model-item" + (m.id === currentModelId ? " active" : "");
+        item.dataset.model = m.id;
+        item.textContent = m.emoji + " " + m.name;
+        item.addEventListener("click", () => {
+          menuEl.style.display = "none";
+          switchModel(m.id);
+        });
+        menuEl.appendChild(item);
+      });
+
+      const sep2 = document.createElement("div");
+      sep2.className = "menu-sep";
+      menuEl.appendChild(sep2);
+
+      const quit = document.createElement("div");
+      quit.className = "menu-item danger";
+      quit.textContent = "✕ 退出";
+      quit.addEventListener("click", () => {
+        if (window.pywebview && window.pywebview.api) window.pywebview.api.quit_app();
+      });
+      menuEl.appendChild(quit);
+    }
+
+    let switching = false;
+    async function switchModel(id) {
+      if (switching || id === currentModelId) return;
+      const m = MODEL_REGISTRY.find(x => x.id === id);
+      if (!m) return;
+      switching = true;
+      setStatus("切换形象: " + m.name + "…");
+      try {
+        await loadModel(m.path, m.id);
+      } catch (e) {
+        setStatus("切换失败（详见控制台）");
+        console.error("[pet] 切换失败:", id, e);
+      }
+      switching = false;
+    }
+
+    // 右键菜单定位
     document.addEventListener("contextmenu", (ev) => {
       ev.preventDefault();
       ev.stopPropagation();
-      // 先显示（否则 offsetWidth/Height 测出来是 0），再定位并夹紧到窗口内
       menuEl.style.visibility = "hidden";
       menuEl.style.display = "block";
       const mw = menuEl.offsetWidth, mh = menuEl.offsetHeight;
@@ -338,22 +385,8 @@
       menuEl.style.top = Math.max(4, y) + "px";
       menuEl.style.visibility = "visible";
     });
-    // 点击其他地方 / 拖动开始时关闭菜单
     document.addEventListener("mousedown", (ev) => {
       if (!menuEl.contains(ev.target)) menuEl.style.display = "none";
-    });
-    // 菜单项点击
-    menuEl.querySelectorAll(".menu-item[data-motion]").forEach((el) => {
-      el.addEventListener("click", () => {
-        menuEl.style.display = "none";
-        menuEl.querySelectorAll(".menu-item").forEach(i => i.classList.remove("active"));
-        el.classList.add("active");
-        setExpression(null);                       // 先复位表情
-        playMotion(el.dataset.motion, undefined, true);  // manual：暂停轮播 15 秒
-      });
-    });
-    document.getElementById("menu-quit").addEventListener("click", () => {
-      if (window.pywebview && window.pywebview.api) window.pywebview.api.quit_app();
     });
 
     // ============ 嘴型动画（简单张合，非口型同步） ============
@@ -362,16 +395,15 @@
         if (live2dModel && live2dModel.internalModel) {
           const core = live2dModel.internalModel.coreModel;
           if (isSpeaking) {
-            // 伪随机张合，模拟说话
             const t = Date.now() / 160;
             const wave = (Math.sin(t) + Math.sin(t * 1.7) + Math.sin(t * 2.3)) / 3;
             mouthOpen = 0.45 + 0.55 * Math.max(0, wave);
           } else {
-            mouthOpen = Math.max(0, mouthOpen - 0.1); // 平滑闭合
+            mouthOpen = Math.max(0, mouthOpen - 0.1);
           }
-          try {
-            core.setParameterValueById("ParamMouthOpenY", mouthOpen);
-          } catch (e) {}
+          if (lipParam) {
+            try { core.setParameterValueById(lipParam, mouthOpen); } catch (e) {}
+          }
         }
         requestAnimationFrame(tick);
       }
@@ -379,15 +411,13 @@
     }
 
     // ============ 字幕 ============
-    // 气泡贴头：把气泡顶部定位到人物头部上方（取模型包围盒顶端附近）
     function updateBubblePosition() {
       if (!live2dModel) return;
       try {
         const bounds = live2dModel.getBounds();
-        // 包围盒顶端 + 少量下移（对准头顶而非发梢最高点）
         const headY = bounds.y + bounds.height * 0.04;
         bubble.style.top = Math.max(4, headY) + "px";
-      } catch (e) { /* 忽略，保持 CSS 默认位置 */ }
+      } catch (e) {}
     }
 
     function showBubble(text) {
@@ -402,9 +432,7 @@
     function pollEvents() {
       if (window.pywebview && window.pywebview.api) {
         window.pywebview.api.drain_events()
-          .then((events) => {
-            if (events && events.length) handleEvents(events);
-          })
+          .then((events) => { if (events && events.length) handleEvents(events); })
           .catch((e) => { setStatus("事件通道错误"); console.error(e); });
       }
       setTimeout(pollEvents, 100);
@@ -416,36 +444,33 @@
           case "speak_start":
             isSpeaking = true;
             showBubble(ev.text || "");
-            setStatus("说话中…");
             break;
           case "speak_stop":
             isSpeaking = false;
-            setStatus("待机");
             break;
           case "emotion":
-            // 情绪 → 表情切换（映射到鲸鱼娘的表情名）
             applyEmotion(ev.value);
             break;
         }
       }
     }
 
-    // 情绪标签 → 鲸鱼娘表情名映射
+    // 情绪 → 表情名候选（按顺序取当前模型真实存在的第一个）
     const EMOTION_MAP = {
-      "happy":     "开心兴奋",
-      "angry":     "angry",       // 英文表情名也兼容
-      "sad":       "悲伤",
-      "surprised": "星星眼",
-      "calm":      null,          // null = 复位默认表情
-      "idle":      null,
+      "happy":     ["开心兴奋", "Smile", "exp_01"],
+      "angry":     ["angry", "Angry", "exp_02"],
+      "sad":       ["悲伤", "Sad", "exp_04"],
+      "surprised": ["星星眼", "Surprised", "exp_05"],
+      "calm":      [],
+      "idle":      [],
     };
     function applyEmotion(emotion) {
       if (!live2dModel) return;
-      const target = EMOTION_MAP[emotion];
-      if (target !== undefined) {
-        // 找真实存在的表情名（中文或英文都试）
-        const hit = expressionNames.find(n => n === target);
-        setExpression(hit || target);
+      const candidates = EMOTION_MAP[emotion];
+      if (candidates) {
+        if (!candidates.length) { setExpression(null); return; }
+        const hit = candidates.find(n => expressionNames.includes(n));
+        setExpression(hit || null);
       }
     }
 
@@ -458,7 +483,14 @@
       }
       try {
         initPixi();
-        await loadModel();
+        startMouthLoop();
+        buildMenu();
+        // 依次尝试注册表里的模型，第一个成功即用
+        for (const m of MODEL_REGISTRY) {
+          try { await loadModel(m.path, m.id); break; }
+          catch (e) { console.warn("[pet] 模型不可用:", m.id, e); }
+        }
+        if (!live2dModel) setStatus("无可用模型（检查 models/ 目录）");
       } catch (e) {
         setStatus("模型加载失败");
         console.error("加载失败:", e);

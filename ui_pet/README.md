@@ -13,15 +13,23 @@ python ui_pet/poc.py
 
 > 这个 POC 里还没有接真实的 DeepSeek 对话和 TTS，是用 `demo_thread` 模拟的说话事件，目的只是验证「窗口 + 形象 + 嘴 + 字幕」能跑通。
 
-## 内置形象（按顺序自动尝试）
+## 内置形象（9 个，右键菜单可切换）
+
+**右键窗口 → 「切换形象」**，即可实时切换，无需改代码。动作菜单会随当前形象自动适配。
 
 | 形象 | 目录 | 来源与许可 |
 |---|---|---|
 | DS 鲸鱼娘（默认） | `ui_pet/models/WhaleGirl/` | B站@氵六青 制作，CC BY-NC-SA 4.0，**署名·非商业·相同方式共享**；角色链：上善无形 → ZipZipPipe → 氵六青 |
-| Hiyori 桃濑日和 | `ui_pet/models/Hiyori/` | Live2D 官方免费示例，小规模商用免费 |
+| Mao 猫娘 | `ui_pet/models/Mao/` | Live2D 官方免费示例 |
+| Natori | `ui_pet/models/Natori/` | Live2D 官方免费示例 |
+| Hiyori 桃濑日和 | `ui_pet/models/Hiyori/` | Live2D 官方免费示例 |
 | Haru | `ui_pet/models/Haru/` | Live2D 官方免费示例 |
+| Ren | `ui_pet/models/Ren/` | Live2D 官方免费示例 |
+| Rice 米团子（Q版） | `ui_pet/models/Rice/` | Live2D 官方免费示例 |
+| Wanko 小狗（Q版） | `ui_pet/models/Wanko/` | Live2D 官方免费示例 |
+| Mark | `ui_pet/models/Mark/` | Live2D 官方免费示例 |
 
-想换形象，把 `ui_pet/pet.html` 里 `MODEL_CANDIDATES` 数组的顺序调一下即可。
+> 8 个 Live2D 官方示例模型均来自 [Live2D/CubismWebSamples](https://github.com/Live2D/CubismWebSamples)，随官方 SDK 免费提供。
 
 ## 验证清单（请逐条确认）
 
@@ -40,17 +48,21 @@ python ui_pet/poc.py
 - **前端依赖**：已全部下载到 `ui_pet/vendor/`（pixi.js + Live2D Cubism Core + pixi-live2d-display），**本地加载，不依赖 CDN**
 - **模型**：见上表，已全部下载到 `ui_pet/models/`
 
-## 窗口形态（B 计划：深色卡片窗）
+## 窗口形态
 
-阶段 0 曾尝试「透明窗口」（WebView2 透明 + 色键兜底），但在部分系统/驱动下 WebView2 渲染为黑色、透明不稳定。已改为**深色渐变圆角卡片窗**：
+- **默认（装 PySide6）**：Qt 后端**透明窗口**，`WA_TranslucentBackground` 机制，Windows 上真透明正解
+- **兜底（未装 PySide6）**：深色渐变圆角卡片窗
 
-- 无边框、置顶、可拖动，背景为深色渐变（观感精致、跨机器一致稳定）
-- 若后续需要透明窗口，可在此方案基础上继续调（保留 `WEBVIEW2_DEFAULT_BACKGROUND_COLOR` 机制）
+```bash
+# 想要透明窗口，先装 Qt 后端：
+pip install PySide6 qtpy
+```
 
 ## 已知风险 / 可能的问题
 
-1. **模型画布比例不同**：换模型后若人物过大/过小/位置偏，调 `ui_pet/pet.html` 里 `loadModel()` 的布局参数（`targetH` / `anchor` / `model.x` / `model.y`）
+1. **模型画布比例不同**：换模型后若人物过大/过小/位置偏，调 `ui_pet/pet.html` 里 `layoutModel()` 的布局参数（`bubbleSpace` / `anchor` / `model.x` / `model.y`）
 2. **模型版权**：DS 鲸鱼娘是社区二创（非商业可用、需署名）；公开发布前记得在 README 里保留署名。商业分发需要联系原作者授权
+3. **部分动作播放失败**：个别模型的动作文件加载偶发失败（已加诊断），POC 阶段可接受，后续阶段再排查
 
 ## 下一步（阶段 1）
 

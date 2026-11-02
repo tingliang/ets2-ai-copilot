@@ -6,7 +6,10 @@ venv/
 # 长期记忆（含用户个人偏好，不提交）
 memory.json
 # 本地下载的模型文件（体积大，走下载脚本获取，不提交）
-models/
+# 只忽略根目录的 models/（whisper + VITS 大模型）
+/models/
+# 但桌宠 Live2D 模型要提交（体积小，3MB，离线可用）
+!/ui_pet/models/
 # TTS 试听输出
 tts_test_out/
 # 注意：.env.example 是配置模板（key 留空），要提交进 git，不要忽略

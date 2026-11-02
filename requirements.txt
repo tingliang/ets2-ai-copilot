@@ -13,3 +13,4 @@ requests             # sherpa 引擎下载模型用
 sherpa-onnx          # 本地离线 TTS（默认引擎，vits-melo-tts-zh_en）
 edge-tts             # 在线中文朗读（可选引擎，微软 TTS）
 
+pywebview             # 桌宠 UI（透明置顶小窗）

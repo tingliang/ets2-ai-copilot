@@ -164,26 +164,52 @@ def main():
 
     html_path = _asset("pet.html")
 
-    # 打开本地 HTML。窗口参数：
-    #   B 计划：放弃透明窗口（WebView2 透明在部分系统/驱动下不稳定，已多轮调试），
-    #   改为「圆角深色卡片窗」——观感精致、稳定可靠、跨机器一致。
-    #   frameless=True 无边框；shadow=False 关投影；easy_drag=True 全窗可拖
-    window = webview.create_window(
-        "ETS2 AI 副驾·桌宠",
-        url=html_path,
-        js_api=api,
-        width=280,
-        height=460,
-        frameless=True,
-        on_top=True,
-        shadow=False,
-        easy_drag=True,
-        transparent=False,
-        background_color="#1B1B2A",
-        resizable=False,
-    )
+    # 窗口形态自动选择：
+    #   1. 装了 PySide6 → Qt 后端透明窗口（Qt 的 WA_TranslucentBackground
+    #      机制成熟可靠，是 Windows 上真透明的正解）
+    #   2. 没装 → WinForms 后端深色圆角卡片窗（稳定兜底）
+    try:
+        import PySide6  # noqa: F401
+        use_qt = True
+    except ImportError:
+        use_qt = False
 
-    webview.start()
+    if use_qt:
+        print("[pet] 使用 Qt 后端：透明窗口模式")
+        mode = "transparent"
+        window = webview.create_window(
+            "ETS2 AI 副驾·桌宠",
+            url=html_path + "?mode=" + mode,
+            js_api=api,
+            width=280,
+            height=460,
+            frameless=True,
+            on_top=True,
+            shadow=False,
+            easy_drag=True,
+            transparent=True,       # Qt 后端原生支持透明
+            background_color="#000000",
+            resizable=False,
+        )
+        webview.start(gui="qt")
+    else:
+        print("[pet] 未安装 PySide6，使用卡片窗模式（想要透明窗口请: pip install PySide6）")
+        mode = "card"
+        window = webview.create_window(
+            "ETS2 AI 副驾·桌宠",
+            url=html_path + "?mode=" + mode,
+            js_api=api,
+            width=280,
+            height=460,
+            frameless=True,
+            on_top=True,
+            shadow=False,
+            easy_drag=True,
+            transparent=False,
+            background_color="#1B1B2A",
+            resizable=False,
+        )
+        webview.start()
 
 
 if __name__ == "__main__":

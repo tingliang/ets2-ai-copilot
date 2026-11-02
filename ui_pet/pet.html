@@ -8,11 +8,15 @@
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body {
     width: 100%; height: 100%;
-    /* B 计划：深色渐变卡片底（放弃透明窗口，观感精致且跨机器稳定） */
-    background: linear-gradient(160deg, #232338 0%, #1B1B2A 55%, #14141f 100%);
+    /* 默认透明背景（Qt 透明窗口模式）；卡片模式由 .card-mode 切换 */
+    background: transparent;
     overflow: hidden;
     font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
     user-select: none;
+  }
+  /* 卡片模式（无 PySide6 时的兜底形态）：深色渐变圆角 */
+  body.card-mode {
+    background: linear-gradient(160deg, #232338 0%, #1B1B2A 55%, #14141f 100%);
     border-radius: 20px;
   }
   /* 整个窗口可拖动（pywebview 官方拖动区域） */
@@ -94,6 +98,13 @@
   <script>
     if (typeof PIXI !== "undefined" && typeof PIXI.live2d === "undefined") {
       document.write('<script src="https://cdn.jsdelivr.net/npm/pixi-live2d-display/dist/cubism4.min.js"><\/script>');
+    }
+  </script>
+
+  <script>
+    // 窗口形态：?mode=transparent（Qt 透明）| ?mode=card（卡片兜底，默认）
+    if (new URLSearchParams(location.search).get("mode") !== "transparent") {
+      document.body.classList.add("card-mode");
     }
   </script>
 

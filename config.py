@@ -30,6 +30,11 @@ WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "base")
 WHISPER_DEVICE = os.environ.get("WHISPER_DEVICE", "auto")
 PTT_KEY = os.environ.get("PTT_KEY", "alt")  # 按住说话热键，见下方支持列表
 
+# ---------- 桌宠 ----------
+# 是否在启动时弹出桌宠窗口（Live2D 副驾形象）。true/1=开启（默认），false/0=关闭。
+# 命令行 --no-pet 可临时覆盖为关闭。
+ENABLE_PET = os.environ.get("ENABLE_PET", "1").strip().lower() in ("1", "true", "yes", "on")
+
 # ---------- TTS 双引擎 ----------
 # TTS_ENGINE:
 #   sherpa —— 本地离线中文女声（vits-melo-tts-zh_en），国内零依赖、断网可用（默认，推荐）

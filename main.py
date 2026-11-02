@@ -72,7 +72,8 @@ import sounddevice as sd
 from pynput import keyboard
 
 import config
-from llm import CopilotLLM, telemetry_snapshot
+from llm import CopilotLLM, telemetry_snapshot, parse_emotion
+from pet_bridge import PetBridge, EVENT_EMOTION_MAP
 
 DEBUG_EVENT = "--debug-event" in sys.argv  # 诊断事件检测，默认关
 DEBUG_TIMING = "--debug-timing" in sys.argv  # 诊断对话延迟分段，默认关
@@ -177,6 +178,10 @@ class CopilotApp:
         from tts import TTS
         self.tts = TTS()
 
+        # 桌宠桥接：默认开启，--no-pet 或 ENABLE_PET=0 关闭
+        pet_enabled = ("--no-pet" not in sys.argv) and getattr(config, "ENABLE_PET", True)
+        self.pet = PetBridge(enabled=pet_enabled)
+
         # 创建遥测读取器（不要求游戏已启动，连不上也能创建，之后自动重连）
         try:
             from telemetry import Ets2Telemetry
@@ -193,6 +198,20 @@ class CopilotApp:
         self._last_event_time = 0.0  # 事件播报节流用
         self._last_activity_time = time.time()  # 上次任何「开口」的时间（主动闲聊用）
         self._last_proactive_time = 0.0          # 上次主动闲聊的时间（冷却用）
+
+    # ---------- 朗读 + 桌宠同步 ----------
+    def _say(self, text: str, emotion: str | None = None):
+        """朗读一段话，并同步驱动桌宠（换表情 → 张嘴+字幕 → 闭嘴）。
+
+        阻塞直到读完（TTS 本身就是阻塞的）。调用方若想不阻塞，自行包线程。
+        """
+        if self.pet:
+            self.pet.speak_start(text, emotion)
+        try:
+            self.tts.speak_text(text)
+        finally:
+            if self.pet:
+                self.pet.speak_stop()
 
     # ---------- 事件自动播报（M4）----------
     def _event_loop(self):
@@ -285,8 +304,9 @@ class CopilotApp:
             text = self.llm.proactive_chat(snap)
             if not text:
                 return
-            print(f"[主动] 小满: {text}")
-            self.tts.speak_text(text)
+            _, clean = parse_emotion(text)  # 剥离 LLM 可能带的情绪标签
+            print(f"[主动] 小满: {clean}")
+            self._say(clean, "happy")
         except Exception as e:
             print(f"[主动] 闲聊失败: {e}")
 
@@ -297,8 +317,9 @@ class CopilotApp:
             if not comment:
                 return
             self._last_activity_time = time.time()  # 事件播报也算「开口」
-            print(f"[事件:{ev.type}] 小满: {comment}")
-            self.tts.speak_text(comment)
+            _, clean = parse_emotion(comment)  # 剥离 LLM 可能带的情绪标签
+            print(f"[事件:{ev.type}] 小满: {clean}")
+            self._say(clean, EVENT_EMOTION_MAP.get(ev.type))
         except Exception as e:
             print(f"[event] 播报失败: {e}")
 
@@ -345,8 +366,8 @@ class CopilotApp:
             import commands
             cmd_reply = commands.run_command(user_text)
             if cmd_reply:
-                threading.Thread(target=self.tts.speak_text,
-                                 args=(cmd_reply,), daemon=True).start()
+                threading.Thread(target=self._say,
+                                 args=(cmd_reply, "calm"), daemon=True).start()
                 return
 
             snap = None
@@ -367,8 +388,10 @@ class CopilotApp:
             print()
             reply = "".join(reply_parts).strip()
             if reply:
-                threading.Thread(target=self.tts.speak_text,
-                                 args=(reply,), daemon=True).start()
+                emotion, clean = parse_emotion(reply)  # 拆出情绪标签，正文朗读
+                if clean:  # 有正文才朗读（避免 LLM 只输出情绪标签时的空播报）
+                    threading.Thread(target=self._say,
+                                     args=(clean, emotion), daemon=True).start()
 
             if DEBUG_TIMING:
                 print(
@@ -390,6 +413,9 @@ class CopilotApp:
         print(f"识别设备: {config.WHISPER_DEVICE}（auto 会自动探测 N 卡）")
         # 启动录音器：无麦克风也不崩溃（会打印提示，接入后自动恢复）
         self.rec.start()
+        # 启动桌宠窗口（默认开启，--no-pet 关闭；启动失败自动降级为纯控制台）
+        if self.pet:
+            self.pet.start()
         # 启动事件自动播报线程（M4）
         if self.telemetry is not None:
             self._event_thread = threading.Thread(target=self._event_loop, daemon=True)
@@ -401,6 +427,8 @@ class CopilotApp:
                     time.sleep(0.5)
             except KeyboardInterrupt:
                 self._event_stop.set()
+                if self.pet:
+                    self.pet.stop()
                 print("\n退出。")
 
 

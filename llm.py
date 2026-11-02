@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import Generator, Optional
 
 from openai import OpenAI
@@ -19,6 +20,46 @@ import config
 
 HISTORY_KEEP = 12          # 保留最近 12 条消息（user+assistant 各算一条）
 SUMMARY_TRIGGER = 24       # 历史超过这么多条时触发压缩
+
+
+# ==================== 情绪标签解析 ====================
+# 约定：副驾在回复最开头用方括号标一个情绪词（见 personas/*.md 的指令），
+# 例如「[开心]前面有辆 Scania R730！」。这里把它解析出来：
+#   返回 (情绪 key, 剥离标签后的正文)。
+# 情绪 key 与前端桌宠 pet.html 的 EMOTION_MAP 对应（happy/angry/sad/surprised/calm）。
+_EMOTION_TAG_MAP = {
+    "开心": "happy", "高兴": "happy", "兴奋": "happy", "快乐": "happy", "happy": "happy",
+    "生气": "angry", "愤怒": "angry", "恼火": "angry", "angry": "angry",
+    "难过": "sad", "悲伤": "sad", "伤心": "sad", "委屈": "sad", "sad": "sad",
+    "惊讶": "surprised", "惊喜": "surprised", "震惊": "surprised", "surprised": "surprised",
+    "平静": "calm", "淡定": "calm", "冷静": "calm", "尴尬": "calm", "calm": "calm",
+}
+_EMOTION_TAGS = "|".join(re.escape(k) for k in sorted(_EMOTION_TAG_MAP, key=len, reverse=True))
+# 匹配两种情况，避免「平静地说」这类无标签文本被误判成情绪标签：
+#   1) 有开头括号： [开心]xxx / （惊喜）xxx（闭括号、冒号均可省略）
+#   2) 无括号但紧跟冒号： 开心：xxx
+_EMOTION_RE = re.compile(
+    rf'^\s*(?:'
+    rf'[\[【〔(（<《]\s*({_EMOTION_TAGS})\s*[\]】〕)）>》]?\s*[:：]?\s*'
+    rf'|'
+    rf'({_EMOTION_TAGS})\s*[:：]\s*'
+    rf')',
+    re.IGNORECASE,
+)
+
+
+def parse_emotion(text: str) -> tuple[Optional[str], str]:
+    """解析文本开头的情绪标签。
+
+    返回 (emotion_key, clean_text)。没有标签时返回 (None, 原文去首尾空白)。
+    """
+    t = (text or "").strip()
+    m = _EMOTION_RE.match(t)
+    if not m:
+        return None, t
+    tag = (m.group(1) or m.group(2)).lower()
+    key = _EMOTION_TAG_MAP.get(tag, "calm")
+    return key, t[m.end():].strip()
 
 _PERSONAS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "personas")
 _LEGACY_PERSONA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "persona.md")
@@ -136,8 +177,10 @@ class CopilotLLM:
                 reply += delta
                 yield delta
 
+        # 剥离情绪标签后再入历史，避免「[开心]」这类标记污染多轮上下文
+        _, clean_reply = parse_emotion(reply)
         self.history.append({"role": "user", "content": user_text})
-        self.history.append({"role": "assistant", "content": reply})
+        self.history.append({"role": "assistant", "content": clean_reply})
 
     def comment_on_event(self, event_text: str) -> str:
         """针对一个车况事件，生成一句小满风格的口头评论（简短、非流式）。"""

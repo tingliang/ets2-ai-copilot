@@ -1,25 +1,19 @@
 """
-阶段 0 POC：验证「透明置顶桌宠窗口 + Live2D 会动形象 + 说话张嘴 + 字幕气泡」技术可行性。
+桌宠窗口进程（阶段一）：透明置顶小窗 + Live2D 会动形象 + 说话张嘴 + 字幕气泡 + 换表情。
 
-独立脚本，不依赖 main.py 的任何逻辑，可单独运行：
-    python ui_pet/poc.py
+两种运行方式：
+1. 由主程序 main.py 通过 PetBridge 拉起（推荐）：主程序往本进程 stdin 逐行写
+   JSON 事件，本进程读 stdin 推给前端。事件类型见 stdin_reader()。
+2. 独立手动运行（调试用）：
+       python ui_pet/poc.py
+   没有 stdin 输入，桌宠静默待命，可右键选动作/切换形象。
 
-验证内容：
-1. pywebview 能否开透明、无边框、置顶的小窗
-2. Live2D 模型（官方示例 Haru）能否渲染、呼吸眨眼
-3. Python -> JS 双向通信（事件总线）是否通
-4. 说话时嘴巴张合 + 字幕气泡
-
-用到的模型：Live2D 官方示例模型 Haru（免费，随 SDK 提供），
-首次运行会自动从 CDN 下载，若 CDN 不通会提示手动放置。
-
-⚠️ 透明窗口是最大风险点：pywebview 的 transparent=True 依赖后端引擎
-（Windows 上默认 EdgeChromium），个别系统/驱动下可能不生效，届时回退为
-「不透明圆角窗口」作为兜底。
+透明窗口依赖 PySide6 + qtpy（Qt 后端原生透明）；未安装时回退深色卡片窗。
 """
 from __future__ import annotations
 
 import ctypes
+import json
 import os
 import sys
 import threading
@@ -146,30 +140,39 @@ class PetAPI:
                 pass
 
 
-def demo_thread(api: PetAPI):
-    """模拟「副驾在说话」的场景：循环推字幕 + 情绪 + 说话状态。"""
-    lines = [
-        ("哎哟，就这车技还跑长途呢，回去重考本吧！", "angry"),
-        ("前面有辆 Scania R730，帅啊。", "happy"),
-        ("油不多了，前面服务区加一下。", "calm"),
-        ("行，知道了。", "idle"),
-    ]
-    i = 0
-    while True:
-        text, emotion = lines[i % len(lines)]
-        api.push({"type": "emotion", "value": emotion})
-        api.push({"type": "speak_start", "text": text})
-        time.sleep(2.5)
-        api.push({"type": "speak_stop"})
-        time.sleep(1.5)
-        i += 1
+def stdin_reader(api: PetAPI):
+    """从 stdin 逐行读 JSON 事件（由主程序的 PetBridge 写入），推给前端。
+
+    事件格式（每行一个 JSON 对象）：
+        {"type": "speak_start", "text": "..."}  开始说话：张嘴 + 字幕
+        {"type": "speak_stop"}                   说话结束：闭嘴
+        {"type": "emotion", "value": "happy"}    切换表情
+        {"type": "quit"}                         主程序要求退出
+
+    独立手动运行（python ui_pet/poc.py）时没有 stdin 输入，就静默待命；
+    本线程是守护线程，随进程退出，不会卡住窗口。
+    """
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            print(f"[pet] 忽略非法事件行: {line[:80]}")
+            continue
+        if event.get("type") == "quit":
+            print("[pet] 收到退出指令")
+            api.quit_app()
+            break
+        api.push(event)
 
 
 def main():
     api = PetAPI()
 
-    # 后台模拟线程（POC 阶段没有真对话，先模拟说话事件）
-    threading.Thread(target=demo_thread, args=(api,), daemon=True).start()
+    # 后台线程：从 stdin 读事件（由主程序 PetBridge 推送；独立运行时静默待命）
+    threading.Thread(target=stdin_reader, args=(api,), daemon=True).start()
 
     html_path = _asset("pet.html")
 

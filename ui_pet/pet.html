@@ -262,17 +262,28 @@
     function playMotion(group, index, manual) {
       if (!live2dModel || !group) return;
       try {
+        // 关键诊断：监听 motion 加载错误 + 直接拿 Promise 结果
+        const mm = live2dModel.internalModel.motionManager;
+        // 打印当前 definitions 的 key（确认真实分组名）
+        if (!window.__defsLogged) {
+          window.__defsLogged = true;
+          console.log("[pet] definitions keys:", Object.keys(mm.definitions || {}));
+          console.log("[pet] motionGroups:", JSON.stringify(mm.motionGroups || {}));
+        }
         const ok = live2dModel.motion(group, index);
         if (ok && ok.then) {
           ok.then(started => {
-            // 显示动作名（诊断轮播是否在跑）
             setStatus((started ? "▶ " : "✗ ") + group + (started ? "" : "（播放失败）"));
+            if (!started) console.warn("[pet] motion 返回 false:", group, "definitions有?", !!mm.definitions?.[group]);
+          }).catch(err => {
+            setStatus("✗ " + group + "（异常）");
+            console.error("[pet] motion 异常:", group, err);
           });
         } else {
           setStatus("▶ " + group);
         }
         if (manual) lastManualTime = Date.now();
-      } catch (e) { console.warn("[pet] 播放动作失败:", group, e); }
+      } catch (e) { console.error("[pet] 播放动作异常:", group, e); }
     }
 
     // 切换表情（name 或 null 复位）

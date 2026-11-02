@@ -8,7 +8,9 @@
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body {
     width: 100%; height: 100%;
-    background: transparent;
+    /* 色键品红：与 poc.py 的 CHROMA_HEX 一致，Win32 会把这颜色抠成透明。
+       页面里严禁出现其他品红元素。 */
+    background: #FE00FE;
     overflow: hidden;
     font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
     user-select: none;
@@ -95,10 +97,14 @@
 
   <script>
     // ============ 配置 ============
-    // 模型：官方示例 Haru（本地优先，CDN 兜底）
-    const MODEL_LOCAL = "./models/Haru/Haru.model3.json";
-    const MODEL_CDN =
-      "https://raw.githubusercontent.com/Live2D/CubismWebSamples/develop/Samples/Resources/Haru/Haru.model3.json";
+    // 模型候选列表（按顺序尝试，第一个加载成功的生效）
+    // 1. DS 鲸鱼娘：DeepSeek 鲸鱼娘二创（B站@氵六青 制作，CC BY-NC-SA 4.0，免费非商业）
+    // 2. Hiyori / 3. Haru：Live2D 官方免费示例模型
+    const MODEL_CANDIDATES = [
+      "./models/WhaleGirl/c_0120.model3.json",
+      "./models/Hiyori/Hiyori.model3.json",
+      "./models/Haru/Haru.model3.json",
+    ];
 
     let app = null;          // PIXI Application
     let live2dModel = null;  // Live2DModel 实例
@@ -129,25 +135,31 @@
       const { Live2DModel } = PIXI.live2d;
       setStatus("加载模型…");
       let model = null;
-      // 先试本地，再试 CDN
-      try {
-        model = await Live2DModel.from(MODEL_LOCAL);
-      } catch (e) {
-        console.warn("本地模型不可用，尝试 CDN:", e);
-        setStatus("本地无模型，从 CDN 加载…");
-        model = await Live2DModel.from(MODEL_CDN);
+      for (const path of MODEL_CANDIDATES) {
+        try {
+          model = await Live2DModel.from(path);
+          console.log("[pet] 模型加载成功:", path);
+          break;
+        } catch (e) {
+          console.warn("[pet] 模型不可用:", path, e);
+        }
+      }
+      if (!model) {
+        setStatus("无可用模型（检查 models/ 目录）");
+        throw new Error("所有模型候选都加载失败");
       }
       live2dModel = model;
       app.stage.addChild(model);
 
-      // 缩放并居中
-      const scale = Math.min(
-        app.view.width / model.width,
-        app.view.height / model.height
-      );
-      model.scale.set(scale * 0.95);
+      // ===== 布局（想调人物大小/位置改这里）=====
+      // 让人物占满窗口高度（略超出底部，只露出上半身更自然）
+      const targetH = app.view.height * 1.35;
+      const scale = targetH / model.height;
+      model.scale.set(scale);
+      // anchor(0.5, 0.35)：模型画布 35% 高度处（大约头部）对齐到锚点位置
+      model.anchor.set(0.5, 0.35);
       model.x = app.view.width / 2;
-      model.y = app.view.height * 0.6;
+      model.y = app.view.height * 0.68;
 
       setStatus("模型已加载 ✓");
 

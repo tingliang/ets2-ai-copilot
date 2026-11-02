@@ -19,6 +19,7 @@
 """
 from __future__ import annotations
 
+import ctypes
 import os
 import sys
 import threading
@@ -30,6 +31,34 @@ import webview
 # 注意：必须在 import webview 之后、create_window 之前设置
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
+
+# 色键透明（Windows 上唯一稳定的透明窗口方案）：
+#   pywebview 的 transparent=True 在 Windows 上官方文档明确「不支持」，
+#   正确做法是「色键」：窗口背景和 HTML 背景都用品红色，
+#   再用 Win32 分层窗口 API 把这个颜色的像素全部抠成透明（桌宠程序的 classic 做法）。
+#   注意：品红只能用在背景，页面里不能有别的品红元素，否则会被一起抠掉。
+CHROMA_HEX = "FE00FE"          # 品红（HTML 里用）
+CHROMA_COLORREF = 0x00FE00FE   # Win32 COLORREF (0x00BBGGRR，品红 R/B 对称无需换算)
+
+
+def _apply_chroma_key(window):
+    """给窗口启用色键透明（必须在窗口显示之后调用）。"""
+    try:
+        user32 = ctypes.windll.user32
+        handle = window.native.Handle
+        try:
+            hwnd = int(handle)
+        except TypeError:
+            hwnd = handle.ToInt64()  # pythonnet 的 System.IntPtr
+        GWL_EXSTYLE = -20
+        WS_EX_LAYERED = 0x00080000
+        LWA_COLORKEY = 0x00000001
+        exstyle = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+        user32.SetWindowLongW(hwnd, GWL_EXSTYLE, exstyle | WS_EX_LAYERED)
+        user32.SetLayeredWindowAttributes(hwnd, CHROMA_COLORREF, 0, LWA_COLORKEY)
+        print("[pet] 色键透明已启用")
+    except Exception as e:
+        print(f"[pet] 色键透明设置失败（背景会显示为品红色）: {e}")
 
 
 def _asset(name: str) -> str:
@@ -87,28 +116,29 @@ def main():
 
     html_path = _asset("pet.html")
 
-    # 打开本地 HTML。透明窗口关键参数：
+    # 打开本地 HTML。窗口参数：
     #   frameless=True      无边框
     #   on_top=True         置顶
-    #   transparent=True    透明背景（EdgeChromium 后端会直接把窗口背景设为 Transparent）
+    #   shadow=False        关掉窗口投影（无边框窗口默认有阴影，桌宠不需要）
     #   easy_drag=True      可直接拖动
-    #   background_color    仅作为「页面加载前」的占位色，必须是 6 位 hex（#RRGGBB），
-    #                       不能带 alpha（8 位），否则 pywebview 6.x 会抛 ValueError
+    #   background_color    设为色键品红（必须 6 位 hex），窗口显示后用 Win32 抠成透明
+    #   注意：pywebview 的 transparent=True 在 Windows 上官方不支持，不要用
     window = webview.create_window(
         "ETS2 AI 副驾·桌宠",
         url=html_path,
         js_api=api,
         width=380,
-        height=520,
+        height=560,
         frameless=True,
         on_top=True,
-        transparent=True,
+        shadow=False,
         easy_drag=True,
-        background_color="#000000",
+        background_color="#" + CHROMA_HEX,
         resizable=False,
     )
 
-    webview.start()
+    # 窗口显示后再启用色键透明（需要已创建的原生句柄）
+    webview.start(lambda: _apply_chroma_key(window))
 
 
 if __name__ == "__main__":

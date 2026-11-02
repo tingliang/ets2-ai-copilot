@@ -115,8 +115,8 @@ def _keep_topmost(window, stop_event):
     """后台保活：把桌宠窗口持续钉在最顶层，且点击时不抢游戏焦点。
 
     场景：ETS2 用「无边框窗口」模式时，普通置顶窗口仍可能被游戏反复
-    抢占；这里每秒用 SetWindowPos(HWND_TOPMOST) 重新置顶，并给窗口加
-    WS_EX_NOACTIVATE（鼠标点击桌宠不会让游戏失焦、不打断驾驶输入）。
+    抢占；这里每秒用 SetWindowPos(HWND_TOPMOST) 重新置顶（用 SWP_NOACTIVATE
+    标志避免每次置顶时抢走游戏焦点，但不动窗口的扩展样式，保证窗口正常显示）。
 
     注意：若游戏是「独占全屏(exclusive fullscreen)」，Windows 会把整块
     屏幕交给游戏独占渲染，任何窗口都无法盖上去——这种情况请把游戏显示
@@ -128,9 +128,6 @@ def _keep_topmost(window, stop_event):
     SWP_NOMOVE = 0x0002
     SWP_NOACTIVATE = 0x0010
     SWP_SHOWWINDOW = 0x0040
-    GWL_EXSTYLE = -20
-    WS_EX_NOACTIVATE = 0x08000000
-    WS_EX_TOOLWINDOW = 0x00000080
 
     # 等窗口句柄就绪（GUI 循环启动后异步可用）
     hwnd = None
@@ -143,18 +140,10 @@ def _keep_topmost(window, stop_event):
         print("[pet] 未拿到窗口句柄，置顶保活未启动")
         return
 
-    # 不抢焦点 + 不在任务栏显示（可选，失败不影响置顶）
-    try:
-        exstyle = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
-        user32.SetWindowLongW(
-            hwnd, GWL_EXSTYLE, exstyle | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW
-        )
-    except Exception:
-        pass
-
-    print("[pet] 置顶保活已启动（每 1 秒重新置顶，点击不抢游戏焦点）")
+    print("[pet] 置顶保活已启动（每 1 秒重新置顶）")
     while not stop_event.is_set():
         try:
+            # 只重钉最顶层 + 不抢激活，不再动窗口扩展样式
             user32.SetWindowPos(
                 hwnd, HWND_TOPMOST, 0, 0, 0, 0,
                 SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE | SWP_SHOWWINDOW,

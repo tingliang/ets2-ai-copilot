@@ -13,4 +13,9 @@ requests             # sherpa 引擎下载模型用
 sherpa-onnx          # 本地离线 TTS（默认引擎，vits-melo-tts-zh_en）
 edge-tts             # 在线中文朗读（可选引擎，微软 TTS）
 
-pywebview             # 桌宠 UI（透明置顶小窗）
+pywebview             # 桌宠 UI
+# 桌宠透明窗口（可选）：PySide6 + qtpy 让 pywebview 走 Qt 后端（原生透明）
+#   不装也能跑（回退深色卡片窗），想要真透明窗口时再装：
+#   pip install PySide6 qtpy
+PySide6               # Qt 透明窗口后端
+qtpy                  # pywebview Qt 后端的胶水层

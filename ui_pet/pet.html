@@ -181,8 +181,70 @@
 
       setStatus("模型已加载 ✓");
 
-      // 呼吸参数（Haru 模型自带呼吸，此处留空，可选增强）
+      // 呼吸参数（模型自带呼吸，此处留空）
       startMouthLoop();
+
+      // 打印可用动作/表情（调试用），并启动「可爱动作自动轮播」
+      dumpModelAssets();
+      startIdleShowcase();
+    }
+
+    // ============ 动作 & 表情（鲸鱼娘自带 8 动作 + 44 表情） ============
+    let motionGroups = [];      // 可用动作组名
+    let expressionNames = [];   // 可用表情名
+
+    function dumpModelAssets() {
+      try {
+        const mm = live2dModel.internalModel.motionManager;
+        const em = live2dModel.internalModel.expressionManager;
+        motionGroups = Object.keys(mm.definitions || {});
+        expressionNames = Object.keys(em.definitions || {});
+        console.log("[pet] 可用动作组:", motionGroups);
+        console.log("[pet] 可用表情:", expressionNames);
+      } catch (e) { console.warn("[pet] 读取动作/表情失败:", e); }
+    }
+
+    // 播放一个动作（group 名 + 可选 index）
+    function playMotion(group, index) {
+      if (!live2dModel || !group) return;
+      try {
+        live2dModel.motion(group, index);
+      } catch (e) { console.warn("[pet] 播放动作失败:", group, e); }
+    }
+
+    // 切换表情（name 或 null 复位）
+    function setExpression(name) {
+      if (!live2dModel) return;
+      try {
+        live2dModel.expression(name);
+      } catch (e) { console.warn("[pet] 切换表情失败:", name, e); }
+    }
+
+    // 可爱动作轮播：轮流播放各种互动动作 + 搭配表情（POC 演示用）
+    const SHOWCASE = [
+      { motion: "Hammer",      expr: "开心兴奋" },
+      { motion: "BubbleGum",   expr: "爱心眼" },
+      { motion: "SprayWater",  expr: "星星眼" },
+      { motion: "Selfie",      expr: "脸红" },
+      { motion: "Ketchup",     expr: "开心兴奋" },
+      { motion: "OpenCase",    expr: "心跳" },
+    ];
+    let showcaseIdx = 0;
+    function startIdleShowcase() {
+      function loop() {
+        if (live2dModel && !isSpeaking) {
+          const item = SHOWCASE[showcaseIdx % SHOWCASE.length];
+          // 表情匹配：优先用模型里真实存在的名字
+          if (item.expr && expressionNames.length) {
+            const hit = expressionNames.find(n => n === item.expr);
+            setExpression(hit || item.expr);
+          }
+          playMotion(item.motion);
+          showcaseIdx++;
+        }
+        setTimeout(loop, 6000);  // 每 6 秒换一个动作
+      }
+      setTimeout(loop, 3000);
     }
 
     // ============ 嘴型动画（简单张合，非口型同步） ============
@@ -252,10 +314,29 @@
             setStatus("待机");
             break;
           case "emotion":
-            // 阶段 0 仅记录，阶段 1 接表情切换
-            console.log("[emotion]", ev.value);
+            // 情绪 → 表情切换（映射到鲸鱼娘的表情名）
+            applyEmotion(ev.value);
             break;
         }
+      }
+    }
+
+    // 情绪标签 → 鲸鱼娘表情名映射
+    const EMOTION_MAP = {
+      "happy":     "开心兴奋",
+      "angry":     "angry",       // 英文表情名也兼容
+      "sad":       "悲伤",
+      "surprised": "星星眼",
+      "calm":      null,          // null = 复位默认表情
+      "idle":      null,
+    };
+    function applyEmotion(emotion) {
+      if (!live2dModel) return;
+      const target = EMOTION_MAP[emotion];
+      if (target !== undefined) {
+        // 找真实存在的表情名（中文或英文都试）
+        const hit = expressionNames.find(n => n === target);
+        setExpression(hit || target);
       }
     }
 

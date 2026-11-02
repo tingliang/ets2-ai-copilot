@@ -43,9 +43,10 @@ CHROMA_COLORREF = 0x00FE00FE   # Win32 COLORREF (0x00BBGGRR，品红 R/B 对称�
 
 def _get_hwnd(window):
     """尽力拿到窗口的原生句柄（HWND），拿不到返回 None。"""
-    # 方式 1：window.native 是 pywebview 的 BrowserView 包装对象，有 .Handle
+    # 方式 1：window.native 是 pywebview 的 BrowserView 包装对象
     native = getattr(window, "native", None)
     if native is not None:
+        # 1a. WinForms 后端：native.Handle（pythonnet System.IntPtr）
         handle = getattr(native, "Handle", None)
         if handle is not None:
             try:
@@ -56,6 +57,13 @@ def _get_hwnd(window):
                 return handle.ToInt64()  # pythonnet System.IntPtr
             except Exception:
                 pass
+        # 1b. Qt 后端：native.winId() 直接返回 HWND（int）
+        try:
+            wid = native.winId()
+            if wid:
+                return int(wid)
+        except Exception:
+            pass
     # 方式 2：用 Win32 按窗口标题找句柄（兜底）
     try:
         user32 = ctypes.windll.user32
@@ -101,6 +109,59 @@ def _apply_chroma_key_retry(window, tries=20, interval=0.5):
                 return
         time.sleep(interval)
     print("[pet] 色键透明设置失败（重试超时，背景会显示为品红色）")
+
+
+def _keep_topmost(window, stop_event):
+    """后台保活：把桌宠窗口持续钉在最顶层，且点击时不抢游戏焦点。
+
+    场景：ETS2 用「无边框窗口」模式时，普通置顶窗口仍可能被游戏反复
+    抢占；这里每秒用 SetWindowPos(HWND_TOPMOST) 重新置顶，并给窗口加
+    WS_EX_NOACTIVATE（鼠标点击桌宠不会让游戏失焦、不打断驾驶输入）。
+
+    注意：若游戏是「独占全屏(exclusive fullscreen)」，Windows 会把整块
+    屏幕交给游戏独占渲染，任何窗口都无法盖上去——这种情况请把游戏显示
+    模式改成「无边框窗口 / borderless windowed」。
+    """
+    user32 = ctypes.windll.user32
+    HWND_TOPMOST = -1
+    SWP_NOSIZE = 0x0001
+    SWP_NOMOVE = 0x0002
+    SWP_NOACTIVATE = 0x0010
+    SWP_SHOWWINDOW = 0x0040
+    GWL_EXSTYLE = -20
+    WS_EX_NOACTIVATE = 0x08000000
+    WS_EX_TOOLWINDOW = 0x00000080
+
+    # 等窗口句柄就绪（GUI 循环启动后异步可用）
+    hwnd = None
+    for _ in range(60):
+        hwnd = _get_hwnd(window)
+        if hwnd:
+            break
+        time.sleep(0.25)
+    if not hwnd:
+        print("[pet] 未拿到窗口句柄，置顶保活未启动")
+        return
+
+    # 不抢焦点 + 不在任务栏显示（可选，失败不影响置顶）
+    try:
+        exstyle = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+        user32.SetWindowLongW(
+            hwnd, GWL_EXSTYLE, exstyle | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW
+        )
+    except Exception:
+        pass
+
+    print("[pet] 置顶保活已启动（每 1 秒重新置顶，点击不抢游戏焦点）")
+    while not stop_event.is_set():
+        try:
+            user32.SetWindowPos(
+                hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
+            )
+        except Exception:
+            pass
+        time.sleep(1.0)
 
 
 def _asset(name: str) -> str:
@@ -182,6 +243,7 @@ def main():
     threading.Thread(target=stdin_reader, args=(api,), daemon=True).start()
 
     html_path = _asset("pet.html")
+    stop_topmost = threading.Event()  # 置顶保活线程的停止开关（守护线程，随进程退出）
 
     # 窗口形态自动选择：
     #   1. 装了 PySide6 → Qt 后端透明窗口（Qt 的 WA_TranslucentBackground
@@ -210,6 +272,9 @@ def main():
             background_color="#000000",
             resizable=False,
         )
+        # 置顶保活：盖在游戏上面 + 点击不抢游戏焦点
+        threading.Thread(target=_keep_topmost,
+                         args=(window, stop_topmost), daemon=True).start()
         webview.start(gui="qt")
     else:
         print("[pet] 未安装 PySide6，使用卡片窗模式（想要透明窗口请: pip install PySide6）")
@@ -228,6 +293,9 @@ def main():
             background_color="#1B1B2A",
             resizable=False,
         )
+        # 置顶保活：盖在游戏上面 + 点击不抢游戏焦点
+        threading.Thread(target=_keep_topmost,
+                         args=(window, stop_topmost), daemon=True).start()
         webview.start()
 
 

@@ -25,6 +25,12 @@ import sys
 import threading
 import time
 
+# 关键：WebView2 的透明背景色必须在创建窗口之前设置。
+# 这是微软官方的透明机制：'00000000' = ARGB 全透明（前两位是 alpha）。
+# pywebview 6.x 的 transparent=True 会同时把 WebView2 DefaultBackgroundColor
+# 设为 Transparent，环境变量作为双保险。
+os.environ["WEBVIEW2_DEFAULT_BACKGROUND_COLOR"] = "00000000"
+
 import webview
 
 # 关键：必须在任何会加载后端引擎前设置好，并显式指定 EdgeChromium（透明窗口支持最好）
@@ -159,22 +165,22 @@ def main():
     html_path = _asset("pet.html")
 
     # 打开本地 HTML。窗口参数：
-    #   frameless=True      无边框
-    #   on_top=True         置顶
-    #   shadow=False        关掉窗口投影（无边框窗口默认有阴影，桌宠不需要）
-    #   easy_drag=True      可直接拖动
-    #   background_color    设为色键品红（必须 6 位 hex），窗口显示后用 Win32 抠成透明
-    #   注意：pywebview 的 transparent=True 在 Windows 上官方不支持，不要用
+    #   transparent=True    pywebview 6.x 在 Windows EdgeChromium 上已原生支持
+    #                       （内部有 Show/Hide hack + WebView2 透明底色）
+    #   background_color    设为色键品红：若 WebView2 透明渲染失败，
+    #                       露出的 GDI 底色是品红，会被下面的色键抠掉（双保险）
+    #   frameless=True      无边框；shadow=False 关投影；easy_drag=True 全窗可拖
     window = webview.create_window(
         "ETS2 AI 副驾·桌宠",
         url=html_path,
         js_api=api,
         width=380,
-        height=560,
+        height=620,
         frameless=True,
         on_top=True,
         shadow=False,
         easy_drag=True,
+        transparent=True,
         background_color="#" + CHROMA_HEX,
         resizable=False,
     )

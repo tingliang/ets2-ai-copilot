@@ -42,14 +42,13 @@ python ui_pet/poc.py
 
 ## 透明窗口的实现原理（Windows）
 
-pywebview 官方文档明确：`transparent=True` 参数 **在 Windows 上不支持**。
-本项目用的是 Windows 桌宠的经典「**色键透明**」方案：
+三层机制叠加，任一生效即透明：
 
-1. 窗口背景和 HTML 背景统一用品红色 `#FE00FE`
-2. 窗口显示后，用 Win32 分层窗口 API（`SetLayeredWindowAttributes` + `LWA_COLORKEY`）把这个颜色的像素全部抠成透明
+1. **WebView2 透明渲染**（主通道）：pywebview 6.x 的 `transparent=True` 在 EdgeChromium 后端已原生支持（内置 Show/Hide hack），同时设置环境变量 `WEBVIEW2_DEFAULT_BACKGROUND_COLOR=00000000`（微软官方透明机制）让 WebView2 不渲染背景
+2. **色键兜底**：窗口 GDI 底色为品红 `#FE00FE`，Web 层透明露出的品红会被 Win32 分层窗口 API 抠成透明
+3. 若两者都失效，窗口显示为品红/白底——请把终端日志发给开发者
 
-> 因此 HTML 页面里**严禁出现其他品红元素**（会被一起抠掉）。
-> 人物边缘可能有极细的粉色描边（抗锯齿混色），属正常现象。
+> 页面 HTML 本身背景为透明，**严禁在页面里使用品红元素**（会被色键误抠）。
 
 ## 已知风险 / 可能的问题
 

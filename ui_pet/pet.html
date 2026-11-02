@@ -8,13 +8,15 @@
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body {
     width: 100%; height: 100%;
-    /* 色键品红：与 poc.py 的 CHROMA_HEX 一致，Win32 会把这颜色抠成透明。
-       页面里严禁出现其他品红元素。 */
-    background: #FE00FE;
+    /* 透明背景：由 WebView2 透明底色 + Form 品红底色 + 色键三者配合实现透明。
+       页面本身绝不能画品红（会被色键误抠）。 */
+    background: transparent;
     overflow: hidden;
     font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
     user-select: none;
   }
+  /* 整个窗口可拖动（pywebview 官方拖动区域） */
+  .pywebview-drag-region { }
   #stage { position: absolute; inset: 0; }
   #stage canvas { display: block; }
 
@@ -65,8 +67,8 @@
   }
 </style>
 </head>
-<body>
-  <div id="stage"></div>
+<body class="pywebview-drag-region">
+  <div id="stage" class="pywebview-drag-region"></div>
   <div id="bubble"></div>
   <div id="status">加载中…</div>
 
@@ -152,7 +154,7 @@
       app.stage.addChild(model);
 
       // ===== 布局（想调人物大小/位置改这里）=====
-      // 展示全身：让整个模型（含脚）都收进窗口，头顶给字幕气泡留空间
+      // 展示全身：让整个模型（含脚）都收进窗口，顶部留出气泡空间
       const bubbleSpace = 0.16;                          // 顶部留 16% 高度给气泡
       const availableH = app.view.height * (1 - bubbleSpace);
       const availableW = app.view.width * 0.94;
@@ -161,6 +163,10 @@
       model.anchor.set(0.5, 0.5);                        // 以中心为锚，等比例缩放不偏移
       model.x = app.view.width / 2;
       model.y = app.view.height * (bubbleSpace + (1 - bubbleSpace) / 2);
+
+      // 气泡贴头：把字幕气泡定位到人物头顶
+      updateBubblePosition();
+      window.addEventListener("resize", updateBubblePosition);
 
       setStatus("模型已加载 ✓");
 
@@ -191,6 +197,17 @@
     }
 
     // ============ 字幕 ============
+    // 气泡贴头：把气泡顶部定位到人物头部上方（取模型包围盒顶端附近）
+    function updateBubblePosition() {
+      if (!live2dModel) return;
+      try {
+        const bounds = live2dModel.getBounds();
+        // 包围盒顶端 + 少量下移（对准头顶而非发梢最高点）
+        const headY = bounds.y + bounds.height * 0.04;
+        bubble.style.top = Math.max(4, headY) + "px";
+      } catch (e) { /* 忽略，保持 CSS 默认位置 */ }
+    }
+
     function showBubble(text) {
       if (!text) return;
       bubble.textContent = text;

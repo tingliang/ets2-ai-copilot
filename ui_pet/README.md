@@ -40,15 +40,12 @@ python ui_pet/poc.py
 - **前端依赖**：已全部下载到 `ui_pet/vendor/`（pixi.js + Live2D Cubism Core + pixi-live2d-display），**本地加载，不依赖 CDN**
 - **模型**：见上表，已全部下载到 `ui_pet/models/`
 
-## 透明窗口的实现原理（Windows）
+## 窗口形态（B 计划：深色卡片窗）
 
-三层机制叠加，任一生效即透明：
+阶段 0 曾尝试「透明窗口」（WebView2 透明 + 色键兜底），但在部分系统/驱动下 WebView2 渲染为黑色、透明不稳定。已改为**深色渐变圆角卡片窗**：
 
-1. **WebView2 透明渲染**（主通道）：pywebview 6.x 的 `transparent=True` 在 EdgeChromium 后端已原生支持（内置 Show/Hide hack），同时设置环境变量 `WEBVIEW2_DEFAULT_BACKGROUND_COLOR=00000000`（微软官方透明机制）让 WebView2 不渲染背景
-2. **色键兜底**：窗口 GDI 底色为品红 `#FE00FE`，Web 层透明露出的品红会被 Win32 分层窗口 API 抠成透明
-3. 若两者都失效，窗口显示为品红/白底——请把终端日志发给开发者
-
-> 页面 HTML 本身背景为透明，**严禁在页面里使用品红元素**（会被色键误抠）。
+- 无边框、置顶、可拖动，背景为深色渐变（观感精致、跨机器一致稳定）
+- 若后续需要透明窗口，可在此方案基础上继续调（保留 `WEBVIEW2_DEFAULT_BACKGROUND_COLOR` 机制）
 
 ## 已知风险 / 可能的问题
 

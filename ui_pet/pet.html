@@ -8,12 +8,12 @@
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body {
     width: 100%; height: 100%;
-    /* 透明背景：由 WebView2 透明底色 + Form 品红底色 + 色键三者配合实现透明。
-       页面本身绝不能画品红（会被色键误抠）。 */
-    background: transparent;
+    /* B 计划：深色渐变卡片底（放弃透明窗口，观感精致且跨机器稳定） */
+    background: linear-gradient(160deg, #232338 0%, #1B1B2A 55%, #14141f 100%);
     overflow: hidden;
     font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
     user-select: none;
+    border-radius: 20px;
   }
   /* 整个窗口可拖动（pywebview 官方拖动区域） */
   .pywebview-drag-region { }
@@ -24,16 +24,16 @@
   #bubble {
     position: absolute;
     left: 50%;
-    top: 4px;
+    top: 6px;
     transform: translateX(-50%);
-    max-width: 86%;
-    padding: 10px 16px;
-    background: rgba(255, 255, 255, 0.94);
+    max-width: 88%;
+    padding: 8px 12px;
+    background: rgba(255, 255, 255, 0.95);
     color: #1a1a2e;
-    border-radius: 16px;
-    font-size: 16px;
-    line-height: 1.5;
-    box-shadow: 0 4px 18px rgba(0, 0, 0, 0.18);
+    border-radius: 14px;
+    font-size: 13px;
+    line-height: 1.45;
+    box-shadow: 0 3px 14px rgba(0, 0, 0, 0.35);
     opacity: 0;
     transition: opacity 0.25s ease;
     pointer-events: none;
@@ -45,10 +45,10 @@
     content: "";
     position: absolute;
     left: 50%;
-    bottom: -8px;
+    bottom: -7px;
     transform: translateX(-50%);
-    border: 8px solid transparent;
-    border-top-color: rgba(255, 255, 255, 0.94);
+    border: 7px solid transparent;
+    border-top-color: rgba(255, 255, 255, 0.95);
     border-bottom: none;
   }
 
@@ -57,11 +57,11 @@
     position: absolute;
     left: 8px;
     bottom: 8px;
-    font-size: 11px;
-    color: rgba(255, 255, 255, 0.85);
-    background: rgba(0, 0, 0, 0.45);
-    padding: 3px 10px;
-    border-radius: 8px;
+    font-size: 10px;
+    color: rgba(255, 255, 255, 0.8);
+    background: rgba(0, 0, 0, 0.4);
+    padding: 2px 9px;
+    border-radius: 7px;
     pointer-events: none;
     z-index: 10;
   }
@@ -155,9 +155,9 @@
 
       // ===== 布局（想调人物大小/位置改这里）=====
       // 展示全身：让整个模型（含脚）都收进窗口，顶部留出气泡空间
-      const bubbleSpace = 0.16;                          // 顶部留 16% 高度给气泡
+      const bubbleSpace = 0.14;                          // 顶部留 14% 高度给气泡
       const availableH = app.view.height * (1 - bubbleSpace);
-      const availableW = app.view.width * 0.94;
+      const availableW = app.view.width * 0.96;
       const scale = Math.min(availableW / model.width, availableH / model.height);
       model.scale.set(scale);
       model.anchor.set(0.5, 0.5);                        // 以中心为锚，等比例缩放不偏移

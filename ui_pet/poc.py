@@ -165,29 +165,25 @@ def main():
     html_path = _asset("pet.html")
 
     # 打开本地 HTML。窗口参数：
-    #   transparent=True    pywebview 6.x 在 Windows EdgeChromium 上已原生支持
-    #                       （内部有 Show/Hide hack + WebView2 透明底色）
-    #   background_color    设为色键品红：若 WebView2 透明渲染失败，
-    #                       露出的 GDI 底色是品红，会被下面的色键抠掉（双保险）
-    #   frameless=True      无边框；shadow=False 关投影；easy_drag=True 全窗可拖
+    #   B 计划：放弃透明窗口（WebView2 透明在部分系统/驱动下不稳定，已多轮调试），
+    #   改为「圆角深色卡片窗」——观感精致、稳定可靠、跨机器一致。
+    #   frameless=True 无边框；shadow=False 关投影；easy_drag=True 全窗可拖
     window = webview.create_window(
         "ETS2 AI 副驾·桌宠",
         url=html_path,
         js_api=api,
-        width=380,
-        height=620,
+        width=280,
+        height=460,
         frameless=True,
         on_top=True,
         shadow=False,
         easy_drag=True,
-        transparent=True,
-        background_color="#" + CHROMA_HEX,
+        transparent=False,
+        background_color="#1B1B2A",
         resizable=False,
     )
 
-    # 窗口显示后再启用色键透明（需要已创建的原生句柄）。
-    # 用独立线程轮询等待句柄就绪（native/Handle 是异步赋值的）。
-    webview.start(lambda: _apply_chroma_key_retry(window))
+    webview.start()
 
 
 if __name__ == "__main__":

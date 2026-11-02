@@ -41,24 +41,66 @@ CHROMA_HEX = "FE00FE"          # 品红（HTML 里用）
 CHROMA_COLORREF = 0x00FE00FE   # Win32 COLORREF (0x00BBGGRR，品红 R/B 对称无需换算)
 
 
-def _apply_chroma_key(window):
-    """给窗口启用色键透明（必须在窗口显示之后调用）。"""
+def _get_hwnd(window):
+    """尽力拿到窗口的原生句柄（HWND），拿不到返回 None。"""
+    # 方式 1：window.native 是 pywebview 的 BrowserView 包装对象，有 .Handle
+    native = getattr(window, "native", None)
+    if native is not None:
+        handle = getattr(native, "Handle", None)
+        if handle is not None:
+            try:
+                return int(handle)
+            except (TypeError, ValueError):
+                pass
+            try:
+                return handle.ToInt64()  # pythonnet System.IntPtr
+            except Exception:
+                pass
+    # 方式 2：用 Win32 按窗口标题找句柄（兜底）
     try:
         user32 = ctypes.windll.user32
-        handle = window.native.Handle
+        title = "ETS2 AI 副驾·桌宠"
+        hwnd = user32.FindWindowW(None, title)
+        if hwnd:
+            return hwnd
+    except Exception:
+        pass
+    return None
+
+
+def _apply_chroma_key(window):
+    """给窗口启用色键透明（必须在窗口句柄就绪后调用）。"""
+    user32 = ctypes.windll.user32
+    GWL_EXSTYLE = -20
+    WS_EX_LAYERED = 0x00080000
+    LWA_COLORKEY = 0x00000001
+    hwnd = _get_hwnd(window)
+    if not hwnd:
+        print("[pet] 尚未拿到窗口句柄，稍后重试…")
+        return False
+    exstyle = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+    user32.SetWindowLongW(hwnd, GWL_EXSTYLE, exstyle | WS_EX_LAYERED)
+    user32.SetLayeredWindowAttributes(hwnd, CHROMA_COLORREF, 0, LWA_COLORKEY)
+    print("[pet] 色键透明已启用")
+    return True
+
+
+def _apply_chroma_key_retry(window, tries=20, interval=0.5):
+    """反复尝试启用色键透明，直到成功或超时。
+
+    窗口原生句柄（native/Handle）在 GUI 循环启动后是异步就绪的，
+    所以这里轮询等待，而不是在回调里一次性硬取。
+    """
+    for i in range(tries):
         try:
-            hwnd = int(handle)
-        except TypeError:
-            hwnd = handle.ToInt64()  # pythonnet 的 System.IntPtr
-        GWL_EXSTYLE = -20
-        WS_EX_LAYERED = 0x00080000
-        LWA_COLORKEY = 0x00000001
-        exstyle = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
-        user32.SetWindowLongW(hwnd, GWL_EXSTYLE, exstyle | WS_EX_LAYERED)
-        user32.SetLayeredWindowAttributes(hwnd, CHROMA_COLORREF, 0, LWA_COLORKEY)
-        print("[pet] 色键透明已启用")
-    except Exception as e:
-        print(f"[pet] 色键透明设置失败（背景会显示为品红色）: {e}")
+            if _apply_chroma_key(window):
+                return
+        except Exception as e:
+            if i == tries - 1:
+                print(f"[pet] 色键透明设置失败（背景会显示为品红色）: {e}")
+                return
+        time.sleep(interval)
+    print("[pet] 色键透明设置失败（重试超时，背景会显示为品红色）")
 
 
 def _asset(name: str) -> str:
@@ -137,8 +179,9 @@ def main():
         resizable=False,
     )
 
-    # 窗口显示后再启用色键透明（需要已创建的原生句柄）
-    webview.start(lambda: _apply_chroma_key(window))
+    # 窗口显示后再启用色键透明（需要已创建的原生句柄）。
+    # 用独立线程轮询等待句柄就绪（native/Handle 是异步赋值的）。
+    webview.start(lambda: _apply_chroma_key_retry(window))
 
 
 if __name__ == "__main__":

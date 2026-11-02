@@ -22,7 +22,7 @@
   #bubble {
     position: absolute;
     left: 50%;
-    top: 14px;
+    top: 4px;
     transform: translateX(-50%);
     max-width: 86%;
     padding: 10px 16px;
@@ -152,14 +152,15 @@
       app.stage.addChild(model);
 
       // ===== 布局（想调人物大小/位置改这里）=====
-      // 让人物占满窗口高度（略超出底部，只露出上半身更自然）
-      const targetH = app.view.height * 1.35;
-      const scale = targetH / model.height;
+      // 展示全身：让整个模型（含脚）都收进窗口，头顶给字幕气泡留空间
+      const bubbleSpace = 0.16;                          // 顶部留 16% 高度给气泡
+      const availableH = app.view.height * (1 - bubbleSpace);
+      const availableW = app.view.width * 0.94;
+      const scale = Math.min(availableW / model.width, availableH / model.height);
       model.scale.set(scale);
-      // anchor(0.5, 0.35)：模型画布 35% 高度处（大约头部）对齐到锚点位置
-      model.anchor.set(0.5, 0.35);
+      model.anchor.set(0.5, 0.5);                        // 以中心为锚，等比例缩放不偏移
       model.x = app.view.width / 2;
-      model.y = app.view.height * 0.68;
+      model.y = app.view.height * (bubbleSpace + (1 - bubbleSpace) / 2);
 
       setStatus("模型已加载 ✓");
 

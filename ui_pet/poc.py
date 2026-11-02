@@ -136,6 +136,15 @@ class PetAPI:
     def hello(self, name: str) -> str:
         return f"你好，{name}！我是你的桌宠。"
 
+    def quit_app(self):
+        """右键菜单「退出」：关闭窗口。"""
+        import webview as _w
+        for w in _w.windows:
+            try:
+                w.destroy()
+            except Exception:
+                pass
+
 
 def demo_thread(api: PetAPI):
     """模拟「副驾在说话」的场景：循环推字幕 + 情绪 + 说话状态。"""

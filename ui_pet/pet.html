@@ -56,6 +56,39 @@
     border-bottom: none;
   }
 
+  /* 右键菜单 */
+  #menu {
+    position: fixed;
+    display: none;
+    min-width: 150px;
+    background: rgba(30, 30, 46, 0.97);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 12px;
+    padding: 6px;
+    z-index: 100;
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.5);
+  }
+  #menu .menu-title {
+    font-size: 10px;
+    color: rgba(255, 255, 255, 0.45);
+    padding: 5px 10px 3px;
+  }
+  #menu .menu-item {
+    font-size: 13px;
+    color: rgba(255, 255, 255, 0.92);
+    padding: 7px 12px;
+    border-radius: 8px;
+    cursor: pointer;
+  }
+  #menu .menu-item:hover { background: rgba(255, 255, 255, 0.12); }
+  #menu .menu-item.active { color: #7ab8ff; }
+  #menu .menu-sep {
+    height: 1px;
+    background: rgba(255, 255, 255, 0.12);
+    margin: 5px 6px;
+  }
+  #menu .menu-item.danger:hover { background: rgba(255, 80, 80, 0.25); }
+
   /* 状态提示（POC 用，正式版移除） */
   #status {
     position: absolute;
@@ -75,6 +108,20 @@
   <div id="stage" class="pywebview-drag-region"></div>
   <div id="bubble"></div>
   <div id="status">加载中…</div>
+
+  <!-- 右键菜单 -->
+  <div id="menu">
+    <div class="menu-title">动作</div>
+    <div class="menu-item" data-motion="Hammer">🔨 挥锤子</div>
+    <div class="menu-item" data-motion="BubbleGum">🫧 吹泡泡</div>
+    <div class="menu-item" data-motion="SprayWater">💦 喷水</div>
+    <div class="menu-item" data-motion="Selfie">🤳 自拍</div>
+    <div class="menu-item" data-motion="Ketchup">🍅 挤番茄酱</div>
+    <div class="menu-item" data-motion="OpenCase">📦 开盖</div>
+    <div class="menu-item" data-motion="Idle">😴 待机</div>
+    <div class="menu-sep"></div>
+    <div class="menu-item danger" id="menu-quit">✕ 退出</div>
+  </div>
 
   <!-- pixi.js（本地优先，CDN 兜底） -->
   <script src="./vendor/pixi.min.js"></script>
@@ -205,10 +252,20 @@
     }
 
     // 播放一个动作（group 名 + 可选 index）
-    function playMotion(group, index) {
+    let lastManualTime = 0;   // 手动选动作后暂停轮播一段时间
+    function playMotion(group, index, manual) {
       if (!live2dModel || !group) return;
       try {
-        live2dModel.motion(group, index);
+        const ok = live2dModel.motion(group, index);
+        if (ok && ok.then) {
+          ok.then(started => {
+            // 显示动作名（诊断轮播是否在跑）
+            setStatus((started ? "▶ " : "✗ ") + group + (started ? "" : "（播放失败）"));
+          });
+        } else {
+          setStatus("▶ " + group);
+        }
+        if (manual) lastManualTime = Date.now();
       } catch (e) { console.warn("[pet] 播放动作失败:", group, e); }
     }
 
@@ -232,7 +289,8 @@
     let showcaseIdx = 0;
     function startIdleShowcase() {
       function loop() {
-        if (live2dModel && !isSpeaking) {
+        const manualPaused = Date.now() - lastManualTime < 15000;
+        if (live2dModel && !isSpeaking && !manualPaused) {
           const item = SHOWCASE[showcaseIdx % SHOWCASE.length];
           // 表情匹配：优先用模型里真实存在的名字
           if (item.expr && expressionNames.length) {
@@ -246,6 +304,34 @@
       }
       setTimeout(loop, 3000);
     }
+
+    // ============ 右键菜单（选动作 / 退出） ============
+    const menuEl = document.getElementById("menu");
+    document.addEventListener("contextmenu", (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const mw = menuEl.offsetWidth, mh = menuEl.offsetHeight;
+      menuEl.style.left = Math.min(ev.clientX, window.innerWidth - mw - 4) + "px";
+      menuEl.style.top = Math.min(ev.clientY, window.innerHeight - mh - 4) + "px";
+      menuEl.style.display = "block";
+    });
+    // 点击其他地方 / 拖动开始时关闭菜单
+    document.addEventListener("mousedown", (ev) => {
+      if (!menuEl.contains(ev.target)) menuEl.style.display = "none";
+    });
+    // 菜单项点击
+    menuEl.querySelectorAll(".menu-item[data-motion]").forEach((el) => {
+      el.addEventListener("click", () => {
+        menuEl.style.display = "none";
+        menuEl.querySelectorAll(".menu-item").forEach(i => i.classList.remove("active"));
+        el.classList.add("active");
+        setExpression(null);                       // 先复位表情
+        playMotion(el.dataset.motion, undefined, true);  // manual：暂停轮播 15 秒
+      });
+    });
+    document.getElementById("menu-quit").addEventListener("click", () => {
+      if (window.pywebview && window.pywebview.api) window.pywebview.api.quit_app();
+    });
 
     // ============ 嘴型动画（简单张合，非口型同步） ============
     function startMouthLoop() {

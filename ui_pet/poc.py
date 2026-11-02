@@ -152,6 +152,13 @@ def stdin_reader(api: PetAPI):
     独立手动运行（python ui_pet/poc.py）时没有 stdin 输入，就静默待命；
     本线程是守护线程，随进程退出，不会卡住窗口。
     """
+    # 主程序（PetBridge）用 UTF-8 写 stdin，这里强制按 UTF-8 解码，
+    # 避免 Windows 上默认 GBK 把中文事件读成乱码（进而字幕/表情全废）。
+    if sys.platform == "win32":
+        try:
+            sys.stdin.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
     for line in sys.stdin:
         line = line.strip()
         if not line:

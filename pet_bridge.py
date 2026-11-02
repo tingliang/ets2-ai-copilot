@@ -64,10 +64,15 @@ class PetBridge:
         poc = os.path.join(root, "ui_pet", "poc.py")
         try:
             # stdout/stderr 继承：桌宠的 [pet] 日志直接打到主程序控制台，方便诊断
+            # 关键：必须 text=True + utf-8，否则 stdin 是二进制流，push() 写 str 会
+            # 抛 TypeError（被 except 静默吞掉），事件一条都发不出去。
             self._proc = subprocess.Popen(
                 [sys.executable, poc],
                 stdin=subprocess.PIPE,
                 cwd=root,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
             )
             print("[pet] 桌宠窗口已启动（右键可切换形象/退出）")
             return True

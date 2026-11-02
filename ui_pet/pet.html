@@ -183,6 +183,9 @@
     let expressionNames = [];    // 当前模型可用表情名
     let lastManualTime = 0;      // 手动选动作后暂停轮播一段时间
 
+    let personaList = [];        // 可用人设 [{name, display, emoji, current}]
+    let currentPersona = null;   // 当前人设 name
+
     const stage = document.getElementById("stage");
     const bubble = document.getElementById("bubble");
     const statusEl = document.getElementById("status");
@@ -346,6 +349,30 @@
       sep2.className = "menu-sep";
       menuEl.appendChild(sep2);
 
+      // 切换人设区（由主程序推送清单；空则隐藏）
+      if (personaList.length) {
+        const t3 = document.createElement("div");
+        t3.className = "menu-title";
+        t3.textContent = "切换人设";
+        menuEl.appendChild(t3);
+
+        personaList.forEach(p => {
+          const item = document.createElement("div");
+          item.className = "menu-item persona-item" + (p.name === currentPersona ? " active" : "");
+          item.dataset.persona = p.name;
+          item.textContent = (p.emoji || "🎭") + " " + (p.display || p.name);
+          item.addEventListener("click", () => {
+            menuEl.style.display = "none";
+            switchPersona(p.name);
+          });
+          menuEl.appendChild(item);
+        });
+
+        const sep3 = document.createElement("div");
+        sep3.className = "menu-sep";
+        menuEl.appendChild(sep3);
+      }
+
       const quit = document.createElement("div");
       quit.className = "menu-item danger";
       quit.textContent = "✕ 退出";
@@ -353,6 +380,28 @@
         if (window.pywebview && window.pywebview.api) window.pywebview.api.quit_app();
       });
       menuEl.appendChild(quit);
+    }
+
+    // 切换人设：通知主程序（通过 stdout 反向通道），主程序切换后回推确认
+    async function switchPersona(name) {
+      if (!window.pywebview || !window.pywebview.api) return;
+      if (name === currentPersona) return;
+      try {
+        const r = await window.pywebview.api.switch_persona(name);
+        if (r && r.ok) {
+          currentPersona = name;
+          // 立即更新菜单高亮
+          personaList.forEach(p => p.current = (p.name === name));
+          buildMenu();
+          setStatus("人设 → " + (r.name || name));
+          setTimeout(() => { if (currentModelId) setStatus("✓ " + currentModelId); }, 2500);
+        } else {
+          console.warn("[pet] 切换人设失败:", r);
+          setStatus("人设切换失败");
+        }
+      } catch (e) {
+        console.error("[pet] 切换人设异常:", e);
+      }
     }
 
     let switching = false;
@@ -450,6 +499,11 @@
             break;
           case "emotion":
             applyEmotion(ev.value);
+            break;
+          case "personas":
+            personaList = ev.personas || [];
+            currentPersona = personaList.find(p => p.current)?.name || null;
+            buildMenu();
             break;
         }
       }

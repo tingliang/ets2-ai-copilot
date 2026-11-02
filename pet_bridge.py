@@ -50,6 +50,8 @@ class PetBridge:
         self._enabled = enabled
         self._proc: subprocess.Popen | None = None
         self._lock = threading.Lock()
+        self._stdout_thread: threading.Thread | None = None
+        self._on_command = None  # 收到桌宠上报命令时的回调：fn(command: dict)
 
     # ---------- 生命周期 ----------
     @property
@@ -63,23 +65,57 @@ class PetBridge:
         root = os.path.dirname(os.path.abspath(__file__))
         poc = os.path.join(root, "ui_pet", "poc.py")
         try:
-            # stdout/stderr 继承：桌宠的 [pet] 日志直接打到主程序控制台，方便诊断
+            # stdin 用于主程序→桌宠推事件；stdout 用于桌宠→主程序上报命令（反向通道）。
+            # stderr 继承：桌宠的 [pet] 日志直接打到主程序控制台，方便诊断。
             # 关键：必须 text=True + utf-8，否则 stdin 是二进制流，push() 写 str 会
             # 抛 TypeError（被 except 静默吞掉），事件一条都发不出去。
             self._proc = subprocess.Popen(
                 [sys.executable, poc],
                 stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
                 cwd=root,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
             )
-            print("[pet] 桌宠窗口已启动（右键可切换形象/退出）")
+            # 启动反向通道监听：桌宠通过 stdout 上报命令（如切换人设）
+            self._stdout_thread = threading.Thread(
+                target=self._watch_stdout, args=(self._proc,), daemon=True
+            )
+            self._stdout_thread.start()
+            print("[pet] 桌宠窗口已启动（右键可切换形象/人设/退出）")
             return True
         except Exception as e:
             print(f"[pet] 桌宠启动失败（不影响对话，可加 --no-pet 关闭）: {e}")
             self._proc = None
             return False
+
+    def _watch_stdout(self, proc):
+        """后台监听桌宠子进程 stdout，解析以 CMD: 前缀开头的命令行。"""
+        try:
+            for line in proc.stdout:
+                line = line.strip()
+                if not line:
+                    continue
+                if line.startswith("CMD:"):
+                    try:
+                        cmd = json.loads(line[4:])
+                    except json.JSONDecodeError:
+                        continue
+                    if self._on_command:
+                        try:
+                            self._on_command(cmd)
+                        except Exception:
+                            pass
+                # 其余日志行（[pet] 等）透传到主程序控制台
+                else:
+                    print(line, flush=True)
+        except Exception:
+            pass
+
+    def set_command_handler(self, fn):
+        """设置桌宠命令回调：fn(command: dict)。"""
+        self._on_command = fn
 
     def stop(self):
         """关闭桌宠：先优雅发 quit，超时则强杀，最后确保进程句柄释放。

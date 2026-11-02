@@ -72,7 +72,7 @@ import sounddevice as sd
 from pynput import keyboard
 
 import config
-from llm import CopilotLLM, telemetry_snapshot, parse_emotion
+from llm import CopilotLLM, telemetry_snapshot, parse_emotion, PERSONA_META
 from pet_bridge import PetBridge, EVENT_EMOTION_MAP
 
 DEBUG_EVENT = "--debug-event" in sys.argv  # 诊断事件检测，默认关
@@ -181,6 +181,8 @@ class CopilotApp:
         # 桌宠桥接：默认开启，--no-pet 或 ENABLE_PET=0 关闭
         pet_enabled = ("--no-pet" not in sys.argv) and getattr(config, "ENABLE_PET", True)
         self.pet = PetBridge(enabled=pet_enabled)
+        # 桌宠反向命令处理：右键「切换人设」→ 热切换 llm 人设
+        self.pet.set_command_handler(self._on_pet_command)
 
         # 创建遥测读取器（不要求游戏已启动，连不上也能创建，之后自动重连）
         try:
@@ -212,6 +214,43 @@ class CopilotApp:
         finally:
             if self.pet:
                 self.pet.speak_stop()
+
+    # ---------- 桌宠反向命令（右键菜单 → 主程序）----------
+    def _on_pet_command(self, cmd: dict):
+        """处理桌宠上报的命令（通过 stdout 反向通道）。"""
+        ctype = cmd.get("type")
+        if ctype == "switch_persona":
+            name = cmd.get("name")
+            if name and self.llm.set_persona(name):
+                # 切换成功后，回推最新人设清单（高亮新当前人设）
+                self._push_personas()
+                # 桌宠说一句确认，更有代入感
+                meta = PERSONA_META.get(name, {})
+                display = meta.get("name", name)
+                threading.Thread(
+                    target=self._say,
+                    args=(f"好嘞，我是{display}啦，接下来陪你的就是我～", "happy"),
+                    daemon=True,
+                ).start()
+            else:
+                print(f"[pet] 切换人设失败: {name}")
+
+    def _push_personas(self):
+        """把人设清单推给桌宠（右键菜单显示用）。"""
+        if not self.pet:
+            return
+        from llm import list_personas, PERSONA_META
+        current = getattr(config, "PERSONA", "taozi")
+        personas = []
+        for name in list_personas():
+            meta = PERSONA_META.get(name, {})
+            personas.append({
+                "name": name,
+                "display": meta.get("name", name),
+                "emoji": meta.get("emoji", "🎭"),
+                "current": name == current,
+            })
+        self.pet.push({"type": "personas", "personas": personas})
 
     # ---------- 事件自动播报（M4）----------
     def _event_loop(self):
@@ -415,7 +454,12 @@ class CopilotApp:
         self.rec.start()
         # 启动桌宠窗口（默认开启，--no-pet 关闭；启动失败自动降级为纯控制台）
         if self.pet:
-            self.pet.start()
+            if self.pet.start():
+                # 桌宠起来后，稍等它初始化完，再推人设清单（供右键菜单）
+                def _push_delayed():
+                    time.sleep(1.5)
+                    self._push_personas()
+                threading.Thread(target=_push_delayed, daemon=True).start()
         # 启动事件自动播报线程（M4）
         if self.telemetry is not None:
             self._event_thread = threading.Thread(target=self._event_loop, daemon=True)

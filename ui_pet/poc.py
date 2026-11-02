@@ -122,6 +122,7 @@ class PetAPI:
     def __init__(self):
         self._events: list[dict] = []
         self._lock = threading.Lock()
+        self.personas: list[dict] = []  # 主程序推送的人设清单 [{name, display, emoji, current}]
 
     def push(self, event: dict):
         with self._lock:
@@ -137,6 +138,22 @@ class PetAPI:
 
     def hello(self, name: str) -> str:
         return f"你好，{name}！我是你的桌宠。"
+
+    def switch_persona(self, name: str) -> dict:
+        """前端右键菜单「切换人设」：通过 stdout 上报命令给主程序。
+
+        桌宠是独立子进程，人设由主程序（llm.py）管理，这里只能「上报请求」，
+        主程序监听 stdout 的 CMD: 行来实际切换。返回 {ok, name} 供前端提示。
+        """
+        try:
+            print(f"CMD:{json.dumps({'type': 'switch_persona', 'name': name}, ensure_ascii=False)}", flush=True)
+            return {"ok": True, "name": name}
+        except Exception as e:
+            return {"ok": False, "name": name, "error": str(e)}
+
+    def list_personas(self) -> list:
+        """返回可用人设清单（主程序启动时通过 stdin 推送过来，这里只是兜底）。"""
+        return self.personas
 
     def quit_app(self):
         """右键菜单「退出」：关闭窗口。"""
@@ -180,6 +197,11 @@ def stdin_reader(api: PetAPI):
             print("[pet] 收到退出指令")
             api.quit_app()
             break
+        if event.get("type") == "personas":
+            # 主程序推送可用人设清单：既存到 api 供前端主动拉取，也转发给前端事件队列
+            api.personas = event.get("personas", [])
+            api.push(event)
+            continue
         api.push(event)
 
 

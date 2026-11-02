@@ -65,6 +65,24 @@ _PERSONAS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "person
 _LEGACY_PERSONA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "persona.md")
 _MEMORY_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "memory.json")
 
+# 人设显示名（文件名 -> 中文名 / emoji，用于桌宠右键菜单）
+PERSONA_META = {
+    "taozi":   {"name": "桃子",   "emoji": "🍑"},
+    "xiaoman": {"name": "小满",   "emoji": "🌾"},
+    "gaoleng": {"name": "阿澈",   "emoji": "🧊"},
+}
+
+
+def list_personas() -> list[str]:
+    """列出 personas/ 目录下所有可用人设名（不含 .md 后缀）。"""
+    if not os.path.isdir(_PERSONAS_DIR):
+        return []
+    names = []
+    for fn in os.listdir(_PERSONAS_DIR):
+        if fn.endswith(".md"):
+            names.append(fn[:-3])
+    return sorted(names)
+
 
 def load_persona() -> str:
     """根据 config.PERSONA 读取对应人设文件。
@@ -98,6 +116,26 @@ class CopilotLLM:
         self.history: list[dict] = []   # [{"role","content"}]
         self.memory: str = ""           # 压缩后的长期摘要
         self._load_memory()
+
+    # ---------- 人设热切换 ----------
+    def set_persona(self, name: str) -> bool:
+        """运行时切换人设（不重启进程）。返回是否成功。
+
+        切换后清空短期历史，但保留长期记忆（memory），避免新人格被旧对话风格带偏。
+        """
+        path = os.path.join(_PERSONAS_DIR, f"{name}.md")
+        if not os.path.exists(path):
+            print(f"[llm] 人设文件不存在: {name}（可用: {', '.join(list_personas())}）")
+            return False
+        try:
+            with open(path, encoding="utf-8") as f:
+                self.persona = f.read().strip()
+        except Exception as e:
+            print(f"[llm] 切换人设失败: {e}")
+            return False
+        self.history = []  # 清空短期上下文，新人格重新开始
+        print(f"[llm] 已切换人设 → {name}")
+        return True
 
     # ---------- 长期记忆落盘 ----------
     def _load_memory(self):

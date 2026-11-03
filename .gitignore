@@ -10,6 +10,8 @@ memory.json
 /models/
 # 但桌宠 Live2D 模型要提交（体积小，3MB，离线可用）
 !/ui_pet/models/
+# 大肥鱼（DeepSeek-chan）模型：作者禁止重新分发，仅本地使用，不提交
+/ui_pet/models/DeepSeekChan/
 # TTS 试听输出
 tts_test_out/
 # 注意：.env.example 是配置模板（key 留空），要提交进 git，不要忽略

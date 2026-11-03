@@ -212,6 +212,8 @@ def main():
     threading.Thread(target=stdin_reader, args=(api,), daemon=True).start()
 
     html_path = _asset("pet.html")
+    # 防缓存：Qt WebEngine 会缓存本地文件，加时间戳强制每次启动加载最新版
+    html_url = html_path + "?v=" + str(int(time.time()))
 
     # 窗口形态自动选择：
     #   1. 装了 PySide6 → Qt 后端透明窗口（Qt 的 WA_TranslucentBackground
@@ -238,7 +240,7 @@ def main():
         mode = "transparent"
         window = webview.create_window(
             "ETS2 AI 副驾·桌宠",
-            url=html_path + "?mode=" + mode,
+            url=html_url + "&mode=" + mode,
             js_api=api,
             width=280,
             height=460,
@@ -256,7 +258,7 @@ def main():
         mode = "card"
         window = webview.create_window(
             "ETS2 AI 副驾·桌宠",
-            url=html_path + "?mode=" + mode,
+            url=html_url + "&mode=" + mode,
             js_api=api,
             width=280,
             height=460,

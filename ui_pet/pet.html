@@ -157,6 +157,7 @@
       { id: "Rice",      name: "Rice 米团子", emoji: "🍙", path: "./models/Rice/Rice.model3.json" },
       { id: "Wanko",     name: "Wanko 小狗", emoji: "🐶", path: "./models/Wanko/Wanko.model3.json" },
       { id: "Mark",      name: "Mark",       emoji: "👦", path: "./models/Mark/Mark.model3.json" },
+      { id: "DeepSeekChan", name: "大肥鱼",   emoji: "🐋", path: "./models/DeepSeekChan/model3.json" },
     ];
 
     let app = null;              // PIXI Application
@@ -466,10 +467,10 @@
 
     // 情绪 → 表情名候选（按顺序取当前模型真实存在的第一个）
     const EMOTION_MAP = {
-      "happy":     ["开心兴奋", "Smile", "exp_01"],
-      "angry":     ["angry", "Angry", "exp_02"],
-      "sad":       ["悲伤", "Sad", "exp_04"],
-      "surprised": ["星星眼", "Surprised", "exp_05"],
+      "happy":     ["开心兴奋", "爱心眼", "脸红", "Smile", "exp_01"],
+      "angry":     ["angry", "Angry", "屑屑眼", "exp_02"],
+      "sad":       ["悲伤", "流泪", "黑脸", "Sad", "exp_04"],
+      "surprised": ["星星眼", "圈圈眼", "＞＜眼", "Surprised", "exp_05"],
       "calm":      [],
       "idle":      [],
     };

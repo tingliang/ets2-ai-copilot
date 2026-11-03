@@ -40,6 +40,8 @@
     pointer-events: none;
     white-space: pre-wrap;
     word-break: break-word;
+    max-height: 40%;
+    overflow-y: auto;
   }
   #bubble.show { opacity: 1; }
   #bubble::after {
@@ -419,14 +421,20 @@
 
     // ============ 字幕 ============
     function updateBubblePosition() {
-      // 气泡固定在窗口最顶部，不跟随模型头部——否则「头大」的模型会被气泡盖住脸。
-      // 模型本身已在 layoutModel 里往下让出了顶部空间。
-      bubble.style.top = "2px";
+      // 气泡底边动态贴住模型头顶上方 8px：头大的模型（大肥鱼）不会被盖脸，
+      // 头小的模型（Hiyori）也不会和气泡之间空一大截。
+      if (!live2dModel) return;
+      try {
+        const bounds = live2dModel.getBounds();
+        bubble.style.top = "auto";
+        bubble.style.bottom = (app.view.height - bounds.y + 8) + "px";
+      } catch (e) {}
     }
 
     function showBubble(text) {
       if (!text) return;
       bubble.textContent = text;
+      updateBubblePosition();   // 文字长度变了/动画导致头顶微动，显示前重新贴一次
       bubble.classList.add("show");
       if (bubbleTimer) clearTimeout(bubbleTimer);
       bubbleTimer = setTimeout(() => bubble.classList.remove("show"), 5000);

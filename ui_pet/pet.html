@@ -25,15 +25,15 @@
   #bubble {
     position: absolute;
     left: 50%;
-    top: 6px;
+    top: 2px;
     transform: translateX(-50%);
-    max-width: 88%;
-    padding: 8px 12px;
+    max-width: 92%;
+    padding: 6px 11px;
     background: rgba(255, 255, 255, 0.95);
     color: #1a1a2e;
-    border-radius: 14px;
-    font-size: 13px;
-    line-height: 1.45;
+    border-radius: 13px;
+    font-size: 12px;
+    line-height: 1.4;
     box-shadow: 0 3px 14px rgba(0, 0, 0, 0.35);
     opacity: 0;
     transition: opacity 0.25s ease;
@@ -220,7 +220,9 @@
 
     function layoutModel() {
       const model = live2dModel;
-      const bubbleSpace = 0.14;
+      // 顶部给字幕气泡预留空间。大肥鱼这类「头大身小」的模型头部占比高，
+      // 预留太小时气泡会盖住脸，所以放大到 24%。
+      const bubbleSpace = 0.24;
       const availableH = app.view.height * (1 - bubbleSpace);
       const availableW = app.view.width * 0.96;
       const scale = Math.min(availableW / model.width, availableH / model.height);
@@ -417,12 +419,9 @@
 
     // ============ 字幕 ============
     function updateBubblePosition() {
-      if (!live2dModel) return;
-      try {
-        const bounds = live2dModel.getBounds();
-        const headY = bounds.y + bounds.height * 0.04;
-        bubble.style.top = Math.max(4, headY) + "px";
-      } catch (e) {}
+      // 气泡固定在窗口最顶部，不跟随模型头部——否则「头大」的模型会被气泡盖住脸。
+      // 模型本身已在 layoutModel 里往下让出了顶部空间。
+      bubble.style.top = "2px";
     }
 
     function showBubble(text) {

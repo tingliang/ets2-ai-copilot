@@ -197,6 +197,7 @@ class CopilotApp:
 
         self._event_thread = None
         self._event_stop = threading.Event()
+        self._quit_event = threading.Event()  # 桌宠右键「退出」或 Ctrl+C 触发整体退出
         self._last_event_time = 0.0  # 事件播报节流用
         self._last_activity_time = time.time()  # 上次任何「开口」的时间（主动闲聊用）
         self._last_proactive_time = 0.0          # 上次主动闲聊的时间（冷却用）
@@ -219,7 +220,11 @@ class CopilotApp:
     def _on_pet_command(self, cmd: dict):
         """处理桌宠上报的命令（通过 stdout 反向通道）。"""
         ctype = cmd.get("type")
-        if ctype == "switch_persona":
+        if ctype == "quit_app":
+            # 右键「退出」：整体退出（关语音、停 TTS、释放资源）
+            print("[pet] 收到退出指令，正在关闭…")
+            self._quit_event.set()
+        elif ctype == "switch_persona":
             name = cmd.get("name")
             if name and self.llm.set_persona(name):
                 # 切换成功后，回推最新人设清单（高亮新当前人设）
@@ -473,10 +478,24 @@ class CopilotApp:
             print("[event] 事件自动播报已启动")
         with keyboard.Listener(on_press=self._on_press, on_release=self._on_release) as lis:
             try:
-                while True:
-                    time.sleep(0.5)
+                # 主循环：等桌宠「退出」命令或 Ctrl+C 触发整体退出
+                while not self._quit_event.is_set():
+                    self._quit_event.wait(0.5)
             except KeyboardInterrupt:
+                pass
+            finally:
+                # 统一退出清理：停事件播报、关 TTS/录音、关桌宠
                 self._event_stop.set()
+                if self.tts:
+                    try:
+                        self.tts.stop()
+                    except Exception:
+                        pass
+                if self.rec:
+                    try:
+                        self.rec.stop_recording()
+                    except Exception:
+                        pass
                 if self.pet:
                     self.pet.stop()
                 print("\n退出。")

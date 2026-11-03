@@ -156,7 +156,16 @@ class PetAPI:
         return self.personas
 
     def quit_app(self):
-        """右键菜单「退出」：关闭窗口。"""
+        """右键菜单「退出」：通知主程序整体退出，并关闭本窗口。
+
+        通过 stdout 上报 CMD:{quit_app} 给主程序（主程序会优雅地停 TTS、
+        关事件线程、释放资源）。同时立即关闭本窗口——即使独立运行（无主程序
+        监听）也能正常退出，上报被忽略即可。
+        """
+        try:
+            print(f"CMD:{json.dumps({'type': 'quit_app'})}", flush=True)
+        except Exception:
+            pass
         import webview as _w
         for w in _w.windows:
             try:

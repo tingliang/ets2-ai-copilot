@@ -159,17 +159,6 @@
       { id: "Mark",      name: "Mark",       emoji: "👦", path: "./models/Mark/Mark.model3.json" },
     ];
 
-    // 动作组名 → 中文显示名 / emoji（未知组名自动用原名兜底）
-    const MOTION_LABELS = {
-      "Idle": "待机", "TapBody": "互动（摸头）",
-      "Hammer": "挥锤子", "BubbleGum": "吹泡泡", "SprayWater": "喷水",
-      "Selfie": "自拍", "SelfieQuick": "自拍（快）", "Ketchup": "挤番茄酱", "OpenCase": "开盖",
-    };
-    const MOTION_EMOJIS = {
-      "Idle": "😴", "TapBody": "👋", "Hammer": "🔨", "BubbleGum": "🫧",
-      "SprayWater": "💦", "Selfie": "🤳", "SelfieQuick": "🤳", "Ketchup": "🍅", "OpenCase": "📦",
-    };
-
     let app = null;              // PIXI Application
     let live2dModel = null;      // Live2DModel 实例
     let currentModelId = null;   // 当前模型 id
@@ -181,7 +170,6 @@
 
     let motionGroups = [];       // 当前模型可用动作组名
     let expressionNames = [];    // 当前模型可用表情名
-    let lastManualTime = 0;      // 手动选动作后暂停轮播一段时间
 
     let personaList = [];        // 可用人设 [{name, display, emoji, current}]
     let currentPersona = null;   // 当前人设 name
@@ -259,7 +247,7 @@
     }
 
     // ============ 播放动作 / 切换表情 ============
-    function playMotion(group, index, manual) {
+    function playMotion(group, index) {
       if (!live2dModel || !group) return;
       try {
         const ok = live2dModel.motion(group, index);
@@ -268,7 +256,6 @@
             if (!started) console.warn("[pet] motion 未启动:", group);
           }).catch(err => console.error("[pet] motion 异常:", group, err));
         }
-        if (manual) lastManualTime = Date.now();
       } catch (e) { console.error("[pet] 播放动作异常:", group, e); }
     }
 
@@ -283,8 +270,7 @@
       if (idleTimer) clearTimeout(idleTimer);
       let idx = 0;
       function loop() {
-        const manualPaused = Date.now() - lastManualTime < 15000;
-        if (live2dModel && !isSpeaking && !manualPaused && motionGroups.length) {
+        if (live2dModel && !isSpeaking && motionGroups.length) {
           playMotion(motionGroups[idx % motionGroups.length]);
           idx++;
         }
@@ -296,36 +282,6 @@
     // ============ 右键菜单（动态生成） ============
     function buildMenu() {
       menuEl.innerHTML = "";
-
-      // 动作区
-      const t1 = document.createElement("div");
-      t1.className = "menu-title";
-      t1.textContent = "动作";
-      menuEl.appendChild(t1);
-
-      if (motionGroups.length) {
-        motionGroups.forEach(g => {
-          const item = document.createElement("div");
-          item.className = "menu-item";
-          item.dataset.motion = g;
-          item.textContent = (MOTION_EMOJIS[g] || "🎬") + " " + (MOTION_LABELS[g] || g);
-          item.addEventListener("click", () => {
-            menuEl.style.display = "none";
-            setExpression(null);
-            playMotion(g, undefined, true);
-          });
-          menuEl.appendChild(item);
-        });
-      } else {
-        const none = document.createElement("div");
-        none.className = "menu-title";
-        none.textContent = "（无动作）";
-        menuEl.appendChild(none);
-      }
-
-      const sep1 = document.createElement("div");
-      sep1.className = "menu-sep";
-      menuEl.appendChild(sep1);
 
       // 切换形象区
       const t2 = document.createElement("div");
@@ -385,7 +341,6 @@
     // 切换人设：通知主程序（通过 stdout 反向通道），主程序切换后回推确认
     async function switchPersona(name) {
       if (!window.pywebview || !window.pywebview.api) return;
-      if (name === currentPersona) return;
       try {
         const r = await window.pywebview.api.switch_persona(name);
         if (r && r.ok) {

@@ -112,6 +112,7 @@ class CopilotLLM:
             base_url=config.DEEPSEEK_BASE_URL,
         )
         self.model = config.DEEPSEEK_MODEL
+        self.current_persona = getattr(config, "PERSONA", "taozi") or "taozi"
         self.persona = load_persona()
         self.history: list[dict] = []   # [{"role","content"}]
         self.memory: str = ""           # 压缩后的长期摘要
@@ -122,6 +123,7 @@ class CopilotLLM:
         """运行时切换人设（不重启进程）。返回是否成功。
 
         切换后清空短期历史，但保留长期记忆（memory），避免新人格被旧对话风格带偏。
+        同步更新 config.PERSONA，让后续「当前人设」判断（如桌宠菜单高亮）正确。
         """
         path = os.path.join(_PERSONAS_DIR, f"{name}.md")
         if not os.path.exists(path):
@@ -133,6 +135,8 @@ class CopilotLLM:
         except Exception as e:
             print(f"[llm] 切换人设失败: {e}")
             return False
+        self.current_persona = name
+        config.PERSONA = name  # 同步全局配置，保证「当前人设」判断一致
         self.history = []  # 清空短期上下文，新人格重新开始
         print(f"[llm] 已切换人设 → {name}")
         return True

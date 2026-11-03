@@ -240,7 +240,7 @@ class CopilotApp:
         if not self.pet:
             return
         from llm import list_personas, PERSONA_META
-        current = getattr(config, "PERSONA", "taozi")
+        current = getattr(self.llm, "current_persona", None) or getattr(config, "PERSONA", "taozi")
         personas = []
         for name in list_personas():
             meta = PERSONA_META.get(name, {})

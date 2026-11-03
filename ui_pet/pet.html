@@ -229,6 +229,10 @@
       const bubbleSpace = 0.24;
       const availableH = app.view.height * (1 - bubbleSpace);
       const availableW = app.view.width * 0.96;
+      // 关键：model.width/height 是「当前缩放后」的尺寸。重复调用 layoutModel
+      // （如切换尺寸菜单）时若不先重置，会拿缩放后的值再算，缩放复利发散
+      // （点「小」反而变得巨大糊屏）。先重置 scale=1 拿到原始尺寸再计算。
+      model.scale.set(1);
       const scale = Math.min(availableW / model.width, availableH / model.height) * scaleFactor;
       model.scale.set(scale);
       model.anchor.set(0.5, 0.5);

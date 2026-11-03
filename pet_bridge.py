@@ -42,6 +42,26 @@ EVENT_EMOTION_MAP = {
     "refuel": "calm",
 }
 
+# 车况事件类型 → 桌宠动作组候选（按优先级取当前模型真实存在的第一个）。
+# 不同模型动作组名差异很大：鲸鱼娘/大肥鱼有 8 个丰富动作，官方示例模型
+# 只有 Idle/TapBody。所以用候选列表 + 前端「命中第一个存在的」策略，
+# 找不到就退 TapBody → Idle（前端负责兜底）。
+EVENT_ACTION_MAP = {
+    # 事故：惊跳/夸张动作
+    "accident": ["SelfieQuick", "TakeOff", "FingergunOut", "Hammer"],
+    # 超速/罚款：生气动作
+    "speeding": ["Hammer", "FingergunOut", "TakeOff"],
+    "fined": ["Hammer", "FingergunOut", "TakeOff"],
+    # 低油：沮丧动作
+    "low_fuel": ["OpenCase", "DogtailBack", "RaiseHandBack"],
+    # 任务开始/送达：开心动作
+    "job_started": ["Selfie", "Ketchup", "DogtailOut", "FingergunOut"],
+    "job_delivered": ["Selfie", "Ketchup", "DogtailOut", "FingergunOut"],
+    # 过收费站/加油：不播动作，仅表情（calm）
+    "tollgate": [],
+    "refuel": [],
+}
+
 
 class PetBridge:
     """主程序侧：拉起桌宠子进程并推事件。启动失败自动降级为 no-op。"""
@@ -180,3 +200,10 @@ class PetBridge:
     def set_emotion(self, emotion: str):
         """只换表情，不说话。"""
         self.push({"type": "emotion", "value": emotion})
+
+    def play_action(self, emotion: str, candidates: list[str]):
+        """事件驱动动作：换表情 + 播放候选动作（前端取第一个存在的）。"""
+        if emotion:
+            self.push({"type": "emotion", "value": emotion})
+        if candidates:
+            self.push({"type": "action", "candidates": candidates})

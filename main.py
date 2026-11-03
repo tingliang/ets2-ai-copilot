@@ -73,7 +73,7 @@ from pynput import keyboard
 
 import config
 from llm import CopilotLLM, telemetry_snapshot, parse_emotion, PERSONA_META
-from pet_bridge import PetBridge, EVENT_EMOTION_MAP
+from pet_bridge import PetBridge, EVENT_EMOTION_MAP, EVENT_ACTION_MAP
 
 DEBUG_EVENT = "--debug-event" in sys.argv  # 诊断事件检测，默认关
 DEBUG_TIMING = "--debug-timing" in sys.argv  # 诊断对话延迟分段，默认关
@@ -358,6 +358,12 @@ class CopilotApp:
             self._last_activity_time = time.time()  # 事件播报也算「开口」
             _, clean = parse_emotion(comment)  # 剥离 LLM 可能带的情绪标签
             print(f"[事件:{ev.type}] 小满: {clean}")
+            # 事件驱动动作：先播动作+表情（说话前起势），再朗读
+            if self.pet:
+                emotion = EVENT_EMOTION_MAP.get(ev.type)
+                candidates = EVENT_ACTION_MAP.get(ev.type, [])
+                if candidates:
+                    self.pet.play_action(emotion, candidates)
             self._say(clean, EVENT_EMOTION_MAP.get(ev.type))
         except Exception as e:
             print(f"[event] 播报失败: {e}")

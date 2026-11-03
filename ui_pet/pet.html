@@ -177,6 +177,8 @@
     let personaList = [];        // 可用人设 [{name, display, emoji, current}]
     let currentPersona = null;   // 当前人设 name
 
+    let scaleFactor = 1.0;       // 桌宠缩放系数（右键菜单「尺寸」调整）
+
     const stage = document.getElementById("stage");
     const bubble = document.getElementById("bubble");
     const statusEl = document.getElementById("status");
@@ -227,7 +229,7 @@
       const bubbleSpace = 0.24;
       const availableH = app.view.height * (1 - bubbleSpace);
       const availableW = app.view.width * 0.96;
-      const scale = Math.min(availableW / model.width, availableH / model.height);
+      const scale = Math.min(availableW / model.width, availableH / model.height) * scaleFactor;
       model.scale.set(scale);
       model.anchor.set(0.5, 0.5);
       model.x = app.view.width / 2;
@@ -262,6 +264,17 @@
           }).catch(err => console.error("[pet] motion 异常:", group, err));
         }
       } catch (e) { console.error("[pet] 播放动作异常:", group, e); }
+    }
+
+    // 事件驱动动作：从候选列表里取当前模型真实存在的第一个动作组播放。
+    // 找不到就退 TapBody（8/9 模型都有），再退 Idle。返回实际播放的动作组名。
+    function playActionCandidates(candidates) {
+      if (!live2dModel || !candidates || !candidates.length) return null;
+      let hit = candidates.find(g => motionGroups.includes(g));
+      if (!hit && motionGroups.includes("TapBody")) hit = "TapBody";
+      if (!hit && motionGroups.includes("Idle")) hit = "Idle";
+      if (hit) playMotion(hit, 0);
+      return hit;
     }
 
     function setExpression(name) {
@@ -334,6 +347,34 @@
         menuEl.appendChild(sep3);
       }
 
+      // 尺寸区
+      const t4 = document.createElement("div");
+      t4.className = "menu-title";
+      t4.textContent = "尺寸";
+      menuEl.appendChild(t4);
+
+      const SIZES = [
+        { label: "小", factor: 0.8 },
+        { label: "中", factor: 1.0 },
+        { label: "大", factor: 1.25 },
+      ];
+      SIZES.forEach(s => {
+        const item = document.createElement("div");
+        item.className = "menu-item size-item" + (Math.abs(scaleFactor - s.factor) < 0.01 ? " active" : "");
+        item.textContent = (s.label === "小" ? "▫ " : s.label === "大" ? "▫▫ " : "▫ ") + s.label;
+        item.addEventListener("click", () => {
+          menuEl.style.display = "none";
+          scaleFactor = s.factor;
+          layoutModel();
+          buildMenu();
+        });
+        menuEl.appendChild(item);
+      });
+
+      const sep4 = document.createElement("div");
+      sep4.className = "menu-sep";
+      menuEl.appendChild(sep4);
+
       const quit = document.createElement("div");
       quit.className = "menu-item danger";
       quit.textContent = "✕ 退出";
@@ -396,6 +437,20 @@
     });
     document.addEventListener("mousedown", (ev) => {
       if (!menuEl.contains(ev.target)) menuEl.style.display = "none";
+    });
+
+    // 单击交互：区分「点击」和「拖拽移动」（easy_drag 拖完也会触发 click）。
+    // 用 mousedown/mouseup 的位移判断，位移超过阈值视为拖拽，不触发互动。
+    let downX = 0, downY = 0;
+    document.addEventListener("mousedown", (ev) => {
+      if (ev.button === 0) { downX = ev.clientX; downY = ev.clientY; }
+    });
+    document.addEventListener("mouseup", (ev) => {
+      if (ev.button !== 0) return;
+      const dx = ev.clientX - downX, dy = ev.clientY - downY;
+      if (Math.hypot(dx, dy) > 6) return;   // 拖拽了，不当作点击
+      if (menuEl.contains(ev.target)) return; // 点在菜单上，不触发互动
+      onPetClick();
     });
 
     // ============ 嘴型动画（简单张合，非口型同步） ============
@@ -463,6 +518,9 @@
           case "emotion":
             applyEmotion(ev.value);
             break;
+          case "action":
+            playActionCandidates(ev.candidates || []);
+            break;
           case "personas":
             personaList = ev.personas || [];
             currentPersona = personaList.find(p => p.current)?.name || null;
@@ -470,6 +528,32 @@
             break;
         }
       }
+    }
+
+    // ============ 单击交互：随机俏皮互动 ============
+    const CLICK_QUIPS = [
+      "嘿嘿，戳到啦～",
+      "怎么啦，想我了吗？",
+      "哎呀，别闹～",
+      "在开车呢，别分心戳我啦！",
+      "哼哼，手感不错吧？",
+      "干嘛呀，盯着我看～",
+      "好啦好啦，我在呢～",
+      "专心开车，我帮你盯着路～",
+      "诶嘿，痒痒的～",
+      "有事儿说事儿，别光戳我～",
+    ];
+    const CLICK_EMOTIONS = ["happy", "surprised", "happy", "calm", "happy"];
+    function onPetClick() {
+      if (!live2dModel) return;
+      // 随机俏皮话 + 随机表情 + 随机动作
+      const quip = CLICK_QUIPS[Math.floor(Math.random() * CLICK_QUIPS.length)];
+      showBubble(quip);
+      const emo = CLICK_EMOTIONS[Math.floor(Math.random() * CLICK_EMOTIONS.length)];
+      applyEmotion(emo);
+      // 播一个动作：优先 TapBody（点按反馈），否则用 Idle
+      if (motionGroups.includes("TapBody")) playMotion("TapBody", 0);
+      else if (motionGroups.includes("Idle")) playMotion("Idle", 0);
     }
 
     // 情绪 → 表情名候选（按顺序取当前模型真实存在的第一个）

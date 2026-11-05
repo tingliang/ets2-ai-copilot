@@ -181,6 +181,25 @@ def main():
     def health():
         return jsonify({"ok": True, "engine": "cosyvoice2", "sample_rate": sample_rate})
 
+    @app.post("/shutdown")
+    def shutdown():
+        """Stop this server process.
+
+        The client calls this on exit so the CUDA context (a few GB of GPU
+        memory) is released. It also lets the client kill a server it did NOT
+        spawn (a leftover from a previous crashed session) — reachable by HTTP
+        even when the client has no PID handle for it.
+        """
+        import threading
+        import time
+
+        def _do_exit():
+            time.sleep(0.3)  # let the HTTP response flush before we die
+            os._exit(0)
+
+        threading.Thread(target=_do_exit, daemon=True).start()
+        return jsonify({"ok": True})
+
     @app.post("/tts")
     def tts():
         data = request.get_json(force=True)

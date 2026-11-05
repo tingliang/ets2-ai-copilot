@@ -373,12 +373,19 @@ class _CosyVoiceTTS:
             yield pcm
 
 
+# 保存 CosyVoice 子进程句柄，退出时据此杀掉它并释放 GPU 显存。
+# 之前这里 Popen 后就把句柄丢了，导致 Ctrl+C 退出后子进程仍驻留，
+# 显存（约 5GB）一直不释放。
+_cosyvoice_proc = None
+
+
 def _start_cosyvoice_server() -> bool:
     """拉起 cosyvoice_server.py 子进程（若未运行）。返回是否已在运行/成功拉起。
 
     优先用独立 venv（setup_cosyvoice.py 装的），找不到就退回当前解释器。
     这里只负责把子进程拉起来，具体模型加载由子进程自己完成（异步）。
     """
+    global _cosyvoice_proc
     import subprocess as sp
     import sys as _sys
 
@@ -409,17 +416,61 @@ def _start_cosyvoice_server() -> bool:
         return False
 
     try:
-        sp.Popen(
+        proc = sp.Popen(
             [python, server, "--model-dir", model_dir, "--device", config.COSYVOICE_DEVICE],
             cwd=root,
             # 子进程 stdout/stderr 继承，日志直接打到主程序控制台
             stdout=None, stderr=None,
         )
+        _cosyvoice_proc = proc
         print(f"[tts] 已拉起 CosyVoice 子进程（{python}）")
         return True
     except Exception as e:
         print(f"[tts] 拉起 CosyVoice 子进程失败: {e}")
         return False
+
+
+def _stop_cosyvoice_server():
+    """停掉 CosyVoice 子进程，释放其占用的 GPU 显存。
+
+    优先走 HTTP /shutdown（即使子进程不是本次会话拉起的——比如上一次异常退出
+    留下的孤儿——也能通过端口把它停掉）；若还持有句柄则 terminate() 兜底强杀。
+    注意 terminate()/kill() 只是发信号，必须再 wait() 才能回收句柄。
+    """
+    global _cosyvoice_proc
+    import requests as _req
+
+    # 1) 优雅关停：HTTP /shutdown 对「孤儿进程」同样有效
+    try:
+        _req.post(
+            f"http://{config.COSYVOICE_HOST}:{config.COSYVOICE_PORT}/shutdown",
+            timeout=3,
+        )
+    except Exception:
+        pass
+
+    # 2) 兜底：直接杀掉本会话拉起的子进程
+    proc = _cosyvoice_proc
+    _cosyvoice_proc = None
+    if proc is None:
+        return
+    try:
+        proc.terminate()
+    except Exception:
+        pass
+    try:
+        proc.wait(timeout=5)
+        return
+    except Exception:
+        pass
+    try:
+        proc.kill()
+    except Exception:
+        pass
+    try:
+        proc.wait(timeout=5)
+    except Exception:
+        pass
 
 
 # ==================== edge 引擎 ====================
@@ -540,6 +591,15 @@ class TTS:
             except Exception:
                 pass
         sd.stop()
+
+    def shutdown(self):
+        """退出时统一清理：停播放 + 杀掉 CosyVoice 子进程释放 GPU 显存。
+
+        在 main.py 的退出路径（Ctrl+C / 桌宠右键退出）调用。若不杀子进程，
+        cosyvoice_server.py 会继续驻留并占着几 GB 显存，表现为「退出后显存没释放」。
+        """
+        self.stop()
+        _stop_cosyvoice_server()
 
     def is_playing(self) -> bool:
         return self._playing

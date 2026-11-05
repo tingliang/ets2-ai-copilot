@@ -496,7 +496,7 @@ class CopilotApp:
                 self._event_stop.set()
                 if self.tts:
                     try:
-                        self.tts.stop()
+                        self.tts.shutdown()  # 停播放并杀掉 CosyVoice 子进程，释放 GPU 显存
                     except Exception:
                         pass
                 if self.rec:

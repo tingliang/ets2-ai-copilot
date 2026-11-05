@@ -208,11 +208,12 @@ class CopilotApp:
         """朗读一段话，并同步驱动桌宠（换表情 → 张嘴+字幕 → 闭嘴）。
 
         阻塞直到读完（TTS 本身就是阻塞的）。调用方若想不阻塞，自行包线程。
+        emotion 同时传给 TTS（cosyvoice 引擎做情感语气）和桌宠（换表情）。
         """
         if self.pet:
             self.pet.speak_start(text, emotion)
         try:
-            self.tts.speak_text(text)
+            self.tts.speak_text(text, emotion)
         finally:
             if self.pet:
                 self.pet.speak_stop()

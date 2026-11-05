@@ -35,10 +35,12 @@ PTT_KEY = os.environ.get("PTT_KEY", "alt")  # 按住说话热键，见下方支�
 # 命令行 --no-pet 可临时覆盖为关闭。
 ENABLE_PET = os.environ.get("ENABLE_PET", "1").strip().lower() in ("1", "true", "yes", "on")
 
-# ---------- TTS 双引擎 ----------
+# ---------- TTS 三引擎 ----------
 # TTS_ENGINE:
-#   sherpa —— 本地离线中文女声（vits-melo-tts-zh_en），国内零依赖、断网可用（默认，推荐）
-#   edge   —— 微软 edge-tts「陕西小妮」（需联网，境外接口，国内可能不稳定）
+#   sherpa    —— 本地离线中文女声（vits-melo-tts-zh_en），国内零依赖、断网可用（默认，推荐）
+#   cosyvoice —— CosyVoice2 自然情感语音（需先跑 setup_cosyvoice.py 装独立环境 + 模型，
+#                自然度最高、支持情绪控制；子进程起不来自动回退 sherpa）
+#   edge      —— 微软 edge-tts「陕西小妮」（需联网，境外接口，国内可能不稳定）
 TTS_ENGINE = os.environ.get("TTS_ENGINE", "sherpa").strip().lower()
 TTS_VOICE = os.environ.get("TTS_VOICE", "zh-CN-shaanxi-XiaoniNeural")  # 仅 edge 引擎生效
 TTS_RATE = os.environ.get("TTS_RATE", "+0%")   # 仅 edge 引擎生效，如 "+20%" / "-10%"
@@ -49,6 +51,15 @@ TTS_VOLUME = float(os.environ.get("TTS_VOLUME", "1.0"))  # 音量，可 >1.0 放
 # 按句流式朗读：第一句合成完就开播、边播边合成后续句，显著降低「听到声音」的等待。
 # true=流式（默认），false=整段合成后一次播放。仅 sherpa 引擎生效。
 TTS_STREAM = os.environ.get("TTS_STREAM", "true").strip().lower() in ("1", "true", "yes", "on")
+
+# ---------- CosyVoice2（第三引擎）----------
+# 子进程 HTTP 服务地址；主程序用它合成，起不来自动回退 sherpa
+COSYVOICE_HOST = os.environ.get("COSYVOICE_HOST", "127.0.0.1")
+COSYVOICE_PORT = int(os.environ.get("COSYVOICE_PORT", "9860"))
+COSYVOICE_MODEL_DIR = os.environ.get("COSYVOICE_MODEL_DIR", "")  # 空=默认 models/CosyVoice2-0.5B
+COSYVOICE_DEVICE = os.environ.get("COSYVOICE_DEVICE", "auto")  # auto/cuda/cpu
+# 是否启用情绪控制（把 happy/angry/sad 等映射成 CosyVoice 的语气指令）
+COSYVOICE_EMOTION = os.environ.get("COSYVOICE_EMOTION", "true").strip().lower() in ("1", "true", "yes", "on")
 
 
 # ---------- 热键解析 ----------

@@ -273,6 +273,111 @@ class _SherpaTTS:
         return _postprocess(pcm, self.sample_rate, self._gain)
 
 
+# ==================== CosyVoice2 引擎（独立子进程 HTTP） ====================
+
+class _CosyVoiceTTS:
+    """CosyVoice2 引擎：通过 HTTP 调独立子进程（cosyvoice_server.py）合成。
+
+    子进程由 TTS 类在启用 cosyvoice 时拉起；本类只负责：
+    1. 等子进程 /health 就绪（带超时）
+    2. POST /tts 拿 WAV，转成 float32 PCM（24k 单声道）
+    3. 子进程不可用抛异常，由上层回退 sherpa
+    """
+
+    def __init__(self):
+        import requests
+        self._requests = requests
+        self._host = config.COSYVOICE_HOST
+        self._port = config.COSYVOICE_PORT
+        self.sample_rate = 24000  # CosyVoice2 默认 24k
+
+    @property
+    def _url(self) -> str:
+        return f"http://{self._host}:{self._port}"
+
+    def wait_ready(self, timeout: float = 120.0) -> bool:
+        """等子进程就绪（模型加载要几秒~十几秒）。返回是否就绪。"""
+        import time
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                r = self._requests.get(f"{self._url}/health", timeout=2)
+                if r.status_code == 200 and r.json().get("ok"):
+                    return True
+            except Exception:
+                pass
+            time.sleep(1.0)
+        return False
+
+    def synthesize(self, text: str, emotion: str | None = None) -> np.ndarray:
+        """合成文本，返回 float32 PCM（单声道 24k）。失败抛异常。"""
+        body = {"text": text}
+        if emotion and getattr(config, "COSYVOICE_EMOTION", True):
+            body["emotion"] = emotion
+        body["speed"] = getattr(config, "TTS_LOCAL_SPEED", 1.0)
+
+        r = self._requests.post(f"{self._url}/tts", json=body, timeout=60)
+        r.raise_for_status()
+        # 解析 WAV -> float32 PCM
+        import io as _io
+        import wave as _wave
+        with _wave.open(_io.BytesIO(r.content), "rb") as w:
+            assert w.getnchannels() == 1, "CosyVoice 返回了多声道音频"
+            assert w.getframerate() == self.sample_rate, "CosyVoice 采样率不一致"
+            data = w.readframes(w.getnframes())
+        pcm = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
+        return pcm
+
+
+def _start_cosyvoice_server() -> bool:
+    """拉起 cosyvoice_server.py 子进程（若未运行）。返回是否已在运行/成功拉起。
+
+    优先用独立 venv（setup_cosyvoice.py 装的），找不到就退回当前解释器。
+    这里只负责把子进程拉起来，具体模型加载由子进程自己完成（异步）。
+    """
+    import subprocess as sp
+    import sys as _sys
+
+    root = os.path.dirname(os.path.abspath(__file__))
+    server = os.path.join(root, "cosyvoice_server.py")
+
+    # 先探测服务是否已经在跑（幂等，避免重复拉起）
+    import requests as _req
+    try:
+        r = _req.get(f"http://{config.COSYVOICE_HOST}:{config.COSYVOICE_PORT}/health", timeout=2)
+        if r.status_code == 200:
+            return True
+    except Exception:
+        pass
+
+    # 选解释器：优先独立 venv
+    python = _sys.executable
+    venv_py = os.path.join(root, "venv_cosyvoice", "Scripts", "python.exe")  # Windows
+    if not os.path.exists(venv_py):
+        venv_py = os.path.join(root, "venv_cosyvoice", "bin", "python")  # Linux/mac
+    if os.path.exists(venv_py):
+        python = venv_py
+
+    model_dir = config.COSYVOICE_MODEL_DIR or os.path.join(root, "models", "CosyVoice2-0.5B")
+    if not os.path.isdir(model_dir):
+        print(f"[tts] CosyVoice 模型目录不存在：{model_dir}")
+        print("[tts] 请先运行 python setup_cosyvoice.py 安装模型")
+        return False
+
+    try:
+        sp.Popen(
+            [python, server, "--model-dir", model_dir, "--device", config.COSYVOICE_DEVICE],
+            cwd=root,
+            # 子进程 stdout/stderr 继承，日志直接打到主程序控制台
+            stdout=None, stderr=None,
+        )
+        print(f"[tts] 已拉起 CosyVoice 子进程（{python}）")
+        return True
+    except Exception as e:
+        print(f"[tts] 拉起 CosyVoice 子进程失败: {e}")
+        return False
+
+
 # ==================== edge 引擎 ====================
 
 def synthesize_edge(text: str, rate: str = None) -> bytes:
@@ -310,7 +415,7 @@ def _mp3_to_pcm(mp3_bytes: bytes) -> np.ndarray:
 # ==================== 统一 TTS 类 ====================
 
 class TTS:
-    """整段朗读，双引擎。支持打断。"""
+    """整段朗读，三引擎（sherpa/cosyvoice/edge）。支持打断。"""
 
     def __init__(self):
         self._playing = False
@@ -319,9 +424,12 @@ class TTS:
         self._current_pcm = None
         self._stream = None  # 流式播放时持有的 OutputStream（供打断用）
         self._engine = config.TTS_ENGINE
+        self._sherpa = None
+        self._cosyvoice = None
 
-        if self._engine == "edge":
-            self._sherpa = None
+        if self._engine == "cosyvoice":
+            self._init_cosyvoice()
+        elif self._engine == "edge":
             self._sample_rate = _sample_rate
         else:
             # 默认 sherpa 本地引擎；加载失败自动回退 edge
@@ -334,6 +442,36 @@ class TTS:
                 self._sherpa = None
                 self._engine = "edge"
                 self._sample_rate = _sample_rate
+
+    def _init_cosyvoice(self):
+        """启用 CosyVoice2：拉起子进程并等它就绪；失败回退 sherpa。"""
+        print("[tts] 正在启用 CosyVoice2（自然情感语音）…")
+        if not _start_cosyvoice_server():
+            self._fallback_sherpa("CosyVoice 子进程启动失败")
+            return
+        try:
+            cv = _CosyVoiceTTS()
+            if not cv.wait_ready(timeout=120):
+                raise TimeoutError("CosyVoice 子进程就绪超时")
+            self._cosyvoice = cv
+            self._sample_rate = cv.sample_rate
+            print("[tts] CosyVoice2 就绪 ✓")
+        except Exception as e:
+            self._cosyvoice = None
+            self._fallback_sherpa(f"CosyVoice 不可用（{e}）")
+
+    def _fallback_sherpa(self, reason: str):
+        """回退到 sherpa；sherpa 也不可用则回退 edge。"""
+        print(f"[tts] {reason}，回退到 sherpa 本地引擎")
+        try:
+            self._sherpa = _SherpaTTS()
+            self._sample_rate = self._sherpa.sample_rate
+            self._engine = "sherpa"
+        except Exception as e:
+            print(f"[tts] sherpa 也不可用（{e}），回退 edge-tts")
+            self._sherpa = None
+            self._engine = "edge"
+            self._sample_rate = _sample_rate
 
     def stop(self):
         """打断当前播放，带平滑淡出。"""
@@ -447,8 +585,12 @@ class TTS:
         sd.play(_apply_volume(pcm), self._sample_rate)
         sd.wait()
 
-    def speak_text(self, text: str):
-        """朗读文本（阻塞直到读完）。默认按句流式，可配置整段。"""
+    def speak_text(self, text: str, emotion: str | None = None):
+        """朗读文本（阻塞直到读完）。默认按句流式，可配置整段。
+
+        emotion：情绪 key（happy/angry/sad/surprised/calm），
+        cosyvoice 引擎用它做情感语气控制，其它引擎忽略。
+        """
         text = text.strip()
         if not text:
             return
@@ -459,12 +601,16 @@ class TTS:
         self._playing = True
         self._stop_flag.clear()
         try:
-            use_stream = getattr(config, "TTS_STREAM", True) and self._engine != "edge"
+            use_stream = getattr(config, "TTS_STREAM", True) and self._engine == "sherpa"
             if self._engine == "edge":
                 mp3 = synthesize_edge(text)
                 if self._stop_flag.is_set():
                     return
                 pcm = _mp3_to_pcm(mp3)
+            elif self._engine == "cosyvoice" and self._cosyvoice is not None:
+                # CosyVoice 整段合成（保留整句韵律 + 情绪），一次播放
+                pcm = self._cosyvoice.synthesize(text, emotion)
+                pcm = _postprocess(pcm, self._sample_rate, 1.0)
             elif use_stream:
                 first_ready = self._speak_sherpa_stream(text)
                 if _debug_timing:
@@ -498,7 +644,11 @@ class TTS:
 
 def engine_name() -> str:
     """返回当前引擎名（供 main.py 打印）。"""
-    return "sherpa（本地离线女声）" if config.TTS_ENGINE != "edge" else "edge（陕西小妮，需联网）"
+    if config.TTS_ENGINE == "cosyvoice":
+        return "cosyvoice（自然情感语音）"
+    if config.TTS_ENGINE == "edge":
+        return "edge（陕西小妮，需联网）"
+    return "sherpa（本地离线女声）"
 
 
 if __name__ == "__main__":

@@ -28,16 +28,11 @@ import os
 import sys
 import wave
 
-# Emotion -> CosyVoice instruct prompt (natural language controls the tone).
-# The instruct text is passed as prompt_text to inference_instruct2 / zero-shot.
-EMOTION_INSTRUCT = {
-    "happy": "用开心、轻快、上扬的语气说这句话",
-    "surprised": "用惊讶、好奇、语气上扬地说这句话",
-    "sad": "用温柔、略带低落、放慢语速的语气说这句话",
-    "angry": "用有点生气、不耐烦、语气急促地说这句话",
-    "calm": "用平静、自然、日常聊天的语气说这句话",
-    "idle": "用平静、自然、日常聊天的语气说这句话",
-}
+# NOTE: We intentionally do NOT use CosyVoice2's inference_instruct2 for emotion
+# control. Its frontend feeds the instruct text in as prompt_text, so the
+# instruction itself is read aloud (e.g. "用开心的语气说" is spoken verbatim).
+# Instead we use plain zero-shot and let emotion come through the LLM's wording
+# and the pet's expression. See the /tts handler below.
 
 # CosyVoice2 is a zero-shot model: it has no built-in speaker (no spk2info.pt),
 # so every synthesis needs a reference audio (prompt_wav). The official repo
@@ -162,26 +157,21 @@ def main():
         text = (data.get("text") or "").strip()
         if not text:
             return jsonify({"error": "empty text"}), 400
-        emotion = data.get("emotion") or None
+        # `emotion` is accepted for API compatibility but is intentionally NOT
+        # passed to inference_instruct2: CosyVoice2's instruct2 feeds the instruct
+        # text in as prompt_text, so the instruction itself gets read aloud
+        # (e.g. "用开心的语气说" is spoken). We use plain zero-shot instead —
+        # emotion is conveyed by the LLM's wording plus the pet's expression.
         speed = float(data.get("speed") or 1.0)
 
-        instruct = EMOTION_INSTRUCT.get(emotion)
         try:
             import numpy as np
-            if instruct and prompt_wav:
-                # Emotional tone via instruct2: prompt_wav provides the voice,
-                # instruct_text (as prompt_text) controls the delivery.
-                results = list(
-                    engine.inference_instruct2(text, instruct, prompt_wav, stream=False, speed=speed)
-                )
-            elif prompt_wav:
-                # No emotion: plain zero-shot with the reference voice.
-                results = list(
-                    engine.inference_zero_shot(text, "", prompt_wav, stream=False, speed=speed)
-                )
-            else:
+            if not prompt_wav:
                 return jsonify({"error": "no reference audio (prompt_wav) available"}), 500
-
+            # Plain zero-shot: clone the reference voice, no instruction leak.
+            results = list(
+                engine.inference_zero_shot(text, "", prompt_wav, stream=False, speed=speed)
+            )
             pcm = np.concatenate([r["tts_speech"].numpy() for r in results]) if results else np.zeros(0, dtype=np.float32)
         except Exception as e:
             print(f"[cosyvoice] synthesis failed: {e}", flush=True)

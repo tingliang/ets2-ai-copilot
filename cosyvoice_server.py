@@ -25,8 +25,11 @@ from __future__ import annotations
 import argparse
 import io
 import os
+import struct
 import sys
 import wave
+
+import numpy as np
 
 # NOTE: We intentionally do NOT use CosyVoice2's inference_instruct2 for emotion
 # control. Its frontend feeds the instruct text in as prompt_text, so the
@@ -76,7 +79,6 @@ def _load_engine(model_dir: str, device: str):
 
 def _to_wav(pcm, sample_rate: int) -> bytes:
     """float32 PCM -> 16-bit WAV bytes."""
-    import numpy as np
     pcm = np.asarray(pcm, dtype=np.float32)
     pcm = np.clip(pcm, -1.0, 1.0)
     int16 = (pcm * 32767.0).astype(np.int16)
@@ -152,11 +154,18 @@ def main():
 
     # Warm up the GPU: the first synthesis triggers CUDA kernel compilation /
     # cuDNN autotune, which otherwise makes the user's first real request take
-    # ~20s. Do a short throwaway synthesis now so the first real sentence is fast.
+    # ~20s. Warm up with a sentence of realistic length AND in streaming mode,
+    # so the autotune covers the exact shapes the /tts_stream path uses later.
+    # (A short "你好" only autotunes tiny shapes; the first real sentence then
+    # re-triggers autotune for its longer sequence, which is why the first
+    # request in the wild still shows a high rtf.)
     if device == "cuda" and zero_shot_spk_id:
         try:
-            print("[cosyvoice] warming up (first CUDA inference) ...", flush=True)
-            list(engine.inference_zero_shot("你好", "", "", zero_shot_spk_id=zero_shot_spk_id, stream=False, speed=1.0))
+            print("[cosyvoice] warming up (first CUDA inference, streaming) ...", flush=True)
+            for _ in engine.inference_zero_shot(
+                "晚上好呀，夜路开车我陪你聊。", "", "", zero_shot_spk_id=zero_shot_spk_id, stream=True, speed=1.0
+            ):
+                pass
             print("[cosyvoice] warm-up done", flush=True)
         except Exception as e:
             print(f"[cosyvoice] warm-up failed (non-fatal): {e}", flush=True)
@@ -186,7 +195,6 @@ def main():
         speed = float(data.get("speed") or 1.0)
 
         try:
-            import numpy as np
             if not zero_shot_spk_id and not prompt_wav:
                 return jsonify({"error": "no reference audio (prompt_wav) available"}), 500
             # Plain zero-shot with the cached speaker (see add_zero_shot_spk above).
@@ -230,7 +238,6 @@ def main():
                     elif chunk_pcm.ndim == 2:
                         chunk_pcm = chunk_pcm[0]
                     wav_bytes = _to_wav(chunk_pcm.astype(np.float32), sample_rate)
-                    import struct
                     yield struct.pack(">I", len(wav_bytes)) + wav_bytes
             except Exception as e:
                 print(f"[cosyvoice] streaming synthesis failed: {e}", flush=True)

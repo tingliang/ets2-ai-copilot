@@ -6,9 +6,9 @@ Creates an isolated venv (venv_cosyvoice/) under the project, clones the
 CosyVoice source repo, installs all dependencies, and downloads the
 CosyVoice2-0.5B model.
 
-Why an isolated venv: CosyVoice2 pins torch + transformers + pynini /
-WeTextProcessing, which conflict with the main program's faster-whisper /
-sherpa-onnx, so they must be kept separate.
+Why an isolated venv: CosyVoice2 pins torch + transformers, which conflict
+with the main program's faster-whisper / sherpa-onnx, so they must be kept
+separate. (pynini / WeTextProcessing are NOT required and are skipped.)
 
 Usage:
     python setup_cosyvoice.py                 # full: repo + venv + deps + model
@@ -129,7 +129,9 @@ def _install_deps(py: str) -> None:
              "install torch (CPU, large, be patient)")
 
     # Install the official CosyVoice requirements (from the cloned repo),
-    # filtering out linux-only / torch / onnxruntime-gpu entries.
+    # filtering out linux-only / torch / onnxruntime-gpu entries, plus the two
+    # Windows-problematic packages (wetext, openai-whisper) which are handled
+    # separately below.
     req_file = os.path.join(COSYVOICE_REPO_DIR, "requirements.txt")
     if os.path.exists(req_file):
         print("\n>>> installing official CosyVoice requirements (filtered) ...")
@@ -152,6 +154,18 @@ def _install_deps(py: str) -> None:
             if "onnxruntime-gpu" in low or "tensorrt" in low:
                 skip.append(l)
                 continue
+            # wetext is OPTIONAL: CosyVoice's frontend falls back gracefully when
+            # it is missing, and it pulls in pynini which has no Windows wheel
+            # (needs an OpenFst C++ toolchain). Skipping it only disables Chinese
+            # digit/unit normalization, which is negligible for conversation.
+            if low.startswith("wetext"):
+                skip.append(l)
+                continue
+            # openai-whisper is installed separately with --no-build-isolation
+            # (its sdist imports pkg_resources, removed in setuptools>=81).
+            if low.startswith("openai-whisper"):
+                skip.append(l)
+                continue
         to_install = [l for l in lines if l not in skip]
         if to_install:
             _run([py, "-m", "pip", "install", *to_install],
@@ -159,22 +173,25 @@ def _install_deps(py: str) -> None:
     else:
         print(f"[WARN] requirements.txt not found at {req_file}; falling back to manual list")
         _run([py, "-m", "pip", "install",
-              "transformers", "diffusers==0.29.0", "librosa==0.10.2", "soundfile",
-              "onnxruntime", "fastapi", "uvicorn", "pydantic", "hyperpyyaml",
-              "inflect==7.3.1", "openai-whisper", "conformer", "hydra-core",
-              "omegaconf", "onnx", "pyworld", "rich", "wetext"],
+              "transformers==4.51.3", "diffusers==0.29.0", "librosa==0.10.2",
+              "soundfile==0.12.1", "onnxruntime", "fastapi", "uvicorn", "pydantic",
+              "hyperpyyaml", "inflect==7.3.1", "conformer", "hydra-core",
+              "omegaconf", "onnx", "pyworld", "rich", "x-transformers"],
              "install CosyVoice packages (fallback list)")
 
-    # pynini: text normalization. On Windows there is no official wheel; try pip
-    # (works on many Python 3.10/3.11 builds), fall back to conda if needed.
-    print("\n>>> installing pynini (Windows may need conda; see notes below)")
-    if not _run([py, "-m", "pip", "install", "pynini==2.1.5"], "install pynini"):
-        print("[WARN] pynini install failed. If WeTextProcessing errors, install via conda:")
-        print("        conda install -c conda-forge pynini==2.1.5")
+    # openai-whisper: the 20231117 sdist imports pkg_resources at build time,
+    # which setuptools>=81 removed. Install an older setuptools and build WITHOUT
+    # isolation so the legacy setup.py uses the venv's setuptools (not the fresh
+    # isolated one). Pure-Python package, so no C++ toolchain is involved.
+    print("\n>>> installing openai-whisper (legacy build, needs setuptools<81)")
+    _run([py, "-m", "pip", "install", "setuptools<81", "wheel"], "install setuptools<81 + wheel")
+    _run([py, "-m", "pip", "install", "--no-build-isolation", "openai-whisper==20231117"],
+         "install openai-whisper")
 
-    # WeTextProcessing for Chinese text normalization.
-    _run([py, "-m", "pip", "install", "WeTextProcessing", "--no-deps"],
-         "install WeTextProcessing")
+    # NOTE: WeTextProcessing / pynini are intentionally NOT installed. They are
+    # optional in CosyVoice (the text frontend falls back gracefully), and pynini
+    # has no Windows wheel (requires an OpenFst C++ toolchain). Skipping them only
+    # disables Chinese digit/unit normalization, negligible for casual chat.
 
     # Our own HTTP wrapper's minimal extras.
     for pkg in EXTRA_PACKAGES:

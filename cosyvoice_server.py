@@ -3,8 +3,8 @@
 CosyVoice2 text-to-speech subprocess server.
 
 Why a separate subprocess:
-- CosyVoice2 has heavy deps (torch + pinned transformers + pynini/WeTextProcessing)
-  that conflict with the main program's faster-whisper / sherpa-onnx.
+- CosyVoice2 has heavy deps (torch + pinned transformers) that conflict with the
+  main program's faster-whisper / sherpa-onnx.
 - Model loading takes seconds to tens of seconds and must stay resident.
 - The main program calls it over HTTP; if it fails to start, the main program
   auto-falls back to the sherpa engine.

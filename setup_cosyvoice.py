@@ -39,21 +39,18 @@ MODEL_ID = "iic/CosyVoice2-0.5B"
 REPO_URL = "https://github.com/FunAudioLLM/CosyVoice.git"
 REPO_MIRROR = "https://www.modelscope.cn/models/FunAudioLLM/CosyVoice.git"
 
-# Dependency list (version-pinned, required by CosyVoice official).
-# torch is installed separately (cuda vs cpu); the rest are listed here.
+# Core packages that must match the CosyVoice official requirements closely.
+# The full official requirements.txt (minus linux-only / torch entries) is fetched
+# and installed separately in setup_venv() to avoid missing packages like
+# openai-whisper, conformer, hydra-core, etc.
 PIP_MIRROR = "https://pypi.tuna.tsinghua.edu.cn/simple"
 
-PACKAGES = [
-    "transformers==4.40.1",
-    "diffusers==0.29.0",
-    "librosa==0.10.2",
-    "soundfile",
-    "onnxruntime",
-    "fastapi==0.104.1",
-    "uvicorn[standard]",
-    "pydantic==2.10.6",
-    "hyperpyyaml==1.2.2",
-    "inflect==7.3.1",
+# torch is version-pinned to the official requirements (torch 2.3.1 / torchaudio 2.3.1).
+TORCH_VERSION = "2.3.1"
+TORCHAUDIO_VERSION = "2.3.1"
+
+# Minimal extras for our own cosyvoice_server.py HTTP wrapper (independent of CosyVoice).
+EXTRA_PACKAGES = [
     "flask",
     "requests",
 ]
@@ -124,34 +121,55 @@ def update_submodules() -> bool:
     return True
 
 
-def setup_venv() -> bool:
-    """Create the isolated venv and install dependencies."""
-    py = _venv_python()
-    if os.path.exists(py):
-        print(f"[venv] already exists: {py}")
-        return True
-
-    print(f"[venv] creating isolated environment {VENV_DIR} ...")
-    if not _run([sys.executable, "-m", "venv", VENV_DIR], "create venv"):
-        print("[ERROR] venv creation failed; make sure Python supports the venv module")
-        return False
-
-    # Upgrade pip
-    _run([py, "-m", "pip", "install", "--upgrade", "pip", "-i", PIP_MIRROR], "upgrade pip")
-
-    # Install torch (cuda if NVIDIA GPU is detected, otherwise cpu)
+def _install_deps(py: str) -> None:
+    """Install torch + CosyVoice requirements into the venv (idempotent)."""
+    # Install torch (cuda if NVIDIA GPU is detected, otherwise cpu).
+    # Pin to the official version so transformers/models load correctly.
     print("\n>>> detecting GPU ...")
     if _has_cuda():
-        torch_pkg = "torch"
-        print("    NVIDIA GPU detected, installing torch (cuda build)")
+        print("    NVIDIA GPU detected, installing torch + torchaudio (CUDA 12.1 build)")
+        _run([py, "-m", "pip", "install",
+              f"torch=={TORCH_VERSION}", f"torchaudio=={TORCHAUDIO_VERSION}",
+              "--index-url", "https://download.pytorch.org/whl/cu121"], "install torch (CUDA, large, be patient)")
     else:
-        torch_pkg = "torch"
-        print("    no GPU detected, installing torch (cpu build)")
+        print("    no GPU detected, installing torch + torchaudio (CPU build)")
+        _run([py, "-m", "pip", "install",
+              f"torch=={TORCH_VERSION}", f"torchaudio=={TORCHAUDIO_VERSION}",
+              "-i", PIP_MIRROR], "install torch (CPU, large, be patient)")
 
-    _run([py, "-m", "pip", "install", torch_pkg, "-i", PIP_MIRROR], "install torch (large, be patient)")
-    for pkg in PACKAGES:
-        if not _run([py, "-m", "pip", "install", pkg, "-i", PIP_MIRROR], f"install {pkg}"):
-            print(f"[WARN] {pkg} install failed, continuing with remaining packages")
+    # Install the official CosyVoice requirements (fetched from the repo we cloned),
+    # filtering out linux-only and torch entries we already handled.
+    req_file = os.path.join(COSYVOICE_REPO_DIR, "requirements.txt")
+    if os.path.exists(req_file):
+        print("\n>>> installing official CosyVoice requirements (filtered) ...")
+        with open(req_file, encoding="utf-8") as f:
+            lines = [l.strip() for l in f if l.strip() and not l.strip().startswith("#")]
+        skip = []
+        for l in lines:
+            low = l.lower()
+            if l.startswith("--"):
+                skip.append(l); continue
+            if "sys_platform" in low:
+                if ("win32" in low) != (sys.platform == "win32"):
+                    skip.append(l); continue
+            if low.startswith("torch==") or low.startswith("torchaudio==") or low.startswith("deepspeed"):
+                skip.append(l); continue
+            if "onnxruntime-gpu" in low:
+                skip.append(l); continue
+            if "tensorrt" in low:
+                skip.append(l); continue
+        to_install = [l for l in lines if l not in skip]
+        if to_install:
+            _run([py, "-m", "pip", "install", *to_install, "-i", PIP_MIRROR],
+                 f"install {len(to_install)} CosyVoice requirement packages")
+    else:
+        print(f"[WARN] requirements.txt not found at {req_file}; falling back to manual list")
+        _run([py, "-m", "pip", "install",
+              "transformers", "diffusers==0.29.0", "librosa==0.10.2", "soundfile",
+              "onnxruntime", "fastapi", "uvicorn", "pydantic", "hyperpyyaml",
+              "inflect==7.3.1", "openai-whisper", "conformer", "hydra-core",
+              "omegaconf", "onnx", "pyworld", "rich", "wetext", "-i", PIP_MIRROR],
+             "install CosyVoice packages (fallback list)")
 
     # pynini (on Windows may need conda or a prebuilt wheel; try pip, warn on failure)
     print("\n>>> installing pynini (may need conda on Windows, see notes below)")
@@ -159,8 +177,31 @@ def setup_venv() -> bool:
         print("[WARN] pynini install failed. If WeTextProcessing errors, install via conda:")
         print("        conda install -c conda-forge pynini==2.1.5")
 
+    # WeTextProcessing / wetext for text normalization (Chinese)
     _run([py, "-m", "pip", "install", "WeTextProcessing", "--no-deps", "-i", PIP_MIRROR],
          "install WeTextProcessing")
+
+    # Our own HTTP wrapper's minimal extras
+    for pkg in EXTRA_PACKAGES:
+        _run([py, "-m", "pip", "install", pkg, "-i", PIP_MIRROR], f"install {pkg}")
+
+
+def setup_venv(force_deps: bool = False) -> bool:
+    """Create the isolated venv (if missing) and install dependencies."""
+    py = _venv_python()
+    if not os.path.exists(py):
+        print(f"[venv] creating isolated environment {VENV_DIR} ...")
+        if not _run([sys.executable, "-m", "venv", VENV_DIR], "create venv"):
+            print("[ERROR] venv creation failed; make sure Python supports the venv module")
+            return False
+        # Upgrade pip
+        _run([py, "-m", "pip", "install", "--upgrade", "pip", "-i", PIP_MIRROR], "upgrade pip")
+    else:
+        print(f"[venv] already exists: {py}")
+
+    if force_deps:
+        print("[venv] (re)installing dependencies (--deps-only)")
+    _install_deps(py)
 
     print("\n[venv] dependencies installed OK")
     return True
@@ -225,6 +266,7 @@ def check() -> bool:
 def main():
     ap = argparse.ArgumentParser(description="CosyVoice2 one-click setup")
     ap.add_argument("--venv-only", action="store_true", help="only venv + deps")
+    ap.add_argument("--deps-only", action="store_true", help="only (re)install deps into existing venv")
     ap.add_argument("--model-only", action="store_true", help="only download model")
     ap.add_argument("--repo-only", action="store_true", help="only clone CosyVoice source repo")
     ap.add_argument("--check", action="store_true", help="only check readiness")
@@ -234,10 +276,12 @@ def main():
         sys.exit(0 if check() else 1)
     if args.model_only:
         sys.exit(0 if download_model() else 1)
-    if args.venv_only:
-        sys.exit(0 if setup_venv() else 1)
     if args.repo_only:
         sys.exit(0 if (clone_repo() and update_submodules()) else 1)
+    if args.deps_only:
+        sys.exit(0 if setup_venv(force_deps=True) else 1)
+    if args.venv_only:
+        sys.exit(0 if setup_venv() else 1)
 
     # Default: full flow
     if not clone_repo():

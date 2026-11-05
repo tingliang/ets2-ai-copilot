@@ -201,6 +201,7 @@ class CopilotApp:
         self._last_event_time = 0.0  # 事件播报节流用
         self._last_activity_time = time.time()  # 上次任何「开口」的时间（主动闲聊用）
         self._last_proactive_time = 0.0          # 上次主动闲聊的时间（冷却用）
+        self._used_notes: set[str] = set()       # 已讲过的当地趣事（去重，避免重复）
 
     # ---------- 朗读 + 桌宠同步 ----------
     def _say(self, text: str, emotion: str | None = None):
@@ -342,12 +343,18 @@ class CopilotApp:
         threading.Thread(target=self._speak_proactive, args=(cur,), daemon=True).start()
 
     def _speak_proactive(self, cur):
-        """生成一句主动闲聊并朗读。"""
+        """生成一句主动闲聊并朗读。优先讲当地趣事/特产/历史，无则通用闲聊。"""
         try:
+            from travel_notes import pick_note
             snap = telemetry_snapshot(cur)
-            text = self.llm.proactive_chat(snap)
+            # 拿当前位置城市：优先目的地，其次起点（ETS2 的城市名是英文）
+            city = (getattr(cur, "city_dst", "") or getattr(cur, "city_src", "") or "").strip()
+            topic = pick_note(city, self._used_notes) if city else None
+            text = self.llm.proactive_chat(snap, topic)
             if not text:
                 return
+            if topic:
+                self._used_notes.add(topic)  # 记下讲过的，下次换一条
             _, clean = parse_emotion(text)  # 剥离 LLM 可能带的情绪标签
             print(f"[主动] 小满: {clean}")
             self._say(clean, "happy")

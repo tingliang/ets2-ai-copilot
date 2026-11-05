@@ -244,19 +244,31 @@ class CopilotLLM:
             print(f"[llm] 事件评论生成失败: {e}")
             return ""
 
-    def proactive_chat(self, telemetry_snapshot: Optional[str] = None) -> str:
-        """主动找话题：根据当前车况，随口说一句闲话（1 句，别啰嗦）。"""
+    def proactive_chat(self, telemetry_snapshot: Optional[str] = None, topic: Optional[str] = None) -> str:
+        """主动找话题：传了 topic（当地趣事/特产/历史）就讲它，否则通用闲聊。
+
+        讲趣事时放宽到 150 token（约 80 字，能讲完一个小知识），通用闲聊保持简短。
+        """
         try:
+            if topic:
+                user_content = (
+                    f"我找到一条关于我们当前位置的小知识，你用你的口吻自然地讲给我听：\n{topic}\n"
+                    "要求：1-2 句话，80 字以内，简体中文，自然口语，像朋友闲聊一样，"
+                    "可以带点你的性格和吐槽，但别照搬原文、别提问。"
+                )
+            else:
+                user_content = (
+                    "现在一路平稳，你主动找个话题跟我聊一句吧。"
+                    "可以聊聊路况、风景、这趟货、或者随便吐槽。"
+                    "要求：1 句话，30 字以内，简体中文，自然口语，不要提问、不要复述车况。"
+                )
             resp = self.client.chat.completions.create(
                 model=self.model,
                 messages=[
                     {"role": "system", "content": self._system(telemetry_snapshot)},
-                    {"role": "user", "content":
-                        "现在一路平稳，你主动找个话题跟我聊一句吧。"
-                        "可以聊聊路况、风景、这趟货、或者随便吐槽。"
-                        "要求：1 句话，30 字以内，简体中文，自然口语，不要提问、不要复述车况。"},
+                    {"role": "user", "content": user_content},
                 ],
-                max_tokens=60,
+                max_tokens=150,
                 temperature=0.9,
             )
             return resp.choices[0].message.content.strip()

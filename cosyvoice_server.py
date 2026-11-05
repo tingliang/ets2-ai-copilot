@@ -66,8 +66,11 @@ def _load_engine(model_dir: str, device: str):
     kwargs = {"model_dir": model_dir, "load_jit": False, "load_trt": False}
     if device == "cuda":
         # fp16 halves memory and speeds up inference on NVIDIA GPUs.
-        # AutoModel/CosyVoice2 already auto-disables fp16 if CUDA is unavailable.
+        # load_jit precompiles the LLM + flow encoder (~1.5x faster on a single
+        # request), recommended for single-user local use. load_trt is left off
+        # (needs a TensorRT engine build + extra deps, and adds first-run latency).
         kwargs["fp16"] = True
+        kwargs["load_jit"] = True
     return AutoModel(**kwargs)
 
 
@@ -130,6 +133,18 @@ def main():
         print(f"[cosyvoice] reference audio: {prompt_wav}", flush=True)
     else:
         print("[cosyvoice] WARNING: no reference audio found; instruct/zero-shot will fail", flush=True)
+
+    # Warm up the GPU: the first synthesis triggers CUDA kernel compilation /
+    # cuDNN autotune, which otherwise makes the user's first real request take
+    # ~20s. Do a short throwaway synthesis now so the first real sentence is fast.
+    if device == "cuda" and prompt_wav:
+        try:
+            print("[cosyvoice] warming up (first CUDA inference) ...", flush=True)
+            list(engine.inference_zero_shot("你好", "", prompt_wav, stream=False, speed=1.0))
+            print("[cosyvoice] warm-up done", flush=True)
+        except Exception as e:
+            print(f"[cosyvoice] warm-up failed (non-fatal): {e}", flush=True)
+
     print(f"[cosyvoice] ready, sample rate {sample_rate}, listening on {args.host}:{args.port}", flush=True)
 
     # Lazy import to avoid loading torch before startup completes.

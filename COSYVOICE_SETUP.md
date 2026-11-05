@@ -109,6 +109,12 @@ which is negligible for casual conversation.
 Expected. CosyVoice is a 0.5B model; on CPU synthesis is slower than real-time
 (2–3 s per sentence). Use GPU (CUDA torch) if possible.
 
+**Q: First synthesis takes ~20s, then it is fast?**
+Normal. The first CUDA inference compiles kernels + runs cuDNN autotune. The
+server now does a **warm-up synthesis at startup** (`你好`) so this one-time cost
+is paid during model loading, not on your first real sentence. Subsequent
+sentences should be ~1–3s on an RTX 50-series GPU (`load_jit` + `fp16` enabled).
+
 **Q: `CUDA error: no kernel image is available for execution on the device`?**
 You have an RTX 50-series (Blackwell, sm_120) GPU, but an old torch (2.3.1) that
 only supports up to sm_90. The setup script auto-detects this and installs

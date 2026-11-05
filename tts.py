@@ -331,6 +331,47 @@ class _CosyVoiceTTS:
         pcm = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
         return pcm
 
+    def synthesize_stream(self, text: str, emotion: str | None = None):
+        """流式合成：逐 chunk yield float32 PCM（单声道 24k）。
+
+        每个 chunk 是增量音频（服务端 stream=True 产出），客户端按序拼接播放
+        即可实现边生成边播放，首字延迟降到 ~150ms-1s。
+        """
+        import struct
+        import io as _io
+        import wave as _wave
+        body = {"text": text}
+        if emotion and getattr(config, "COSYVOICE_EMOTION", True):
+            body["emotion"] = emotion
+
+        r = self._requests.post(f"{self._url}/tts_stream", json=body, stream=True, timeout=120)
+        r.raise_for_status()
+        buf = b""
+        while True:
+            # 读取 4 字节长度头
+            while len(buf) < 4:
+                chunk = r.raw.read(4 - len(buf))
+                if not chunk:
+                    return
+                buf += chunk
+            (n,) = struct.unpack(">I", buf[:4])
+            buf = buf[4:]
+            if n == 0:
+                # 0-length 帧 = 服务端错误信号，终止
+                return
+            while len(buf) < n:
+                chunk = r.raw.read(n - len(buf))
+                if not chunk:
+                    return
+                buf += chunk
+            wav_bytes = buf[:n]
+            buf = buf[n:]
+            # 解析 WAV chunk -> float32 PCM
+            with _wave.open(_io.BytesIO(wav_bytes), "rb") as w:
+                data = w.readframes(w.getnframes())
+            pcm = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
+            yield pcm
+
 
 def _start_cosyvoice_server() -> bool:
     """拉起 cosyvoice_server.py 子进程（若未运行）。返回是否已在运行/成功拉起。
@@ -588,6 +629,77 @@ class TTS:
         sd.play(_apply_volume(pcm), self._sample_rate)
         sd.wait()
 
+    def _speak_cosyvoice_stream(self, text: str, emotion: str | None = None):
+        """CosyVoice token 级流式：边合成边写入输出流，首字延迟 ~150ms-1s。
+
+        服务端 /tts_stream 用 stream=True 产出增量 chunk，这里逐 chunk 写入
+        同一个 OutputStream，实现真正的边生成边播放（不是按句，是按 token）。
+        """
+        sd.stop()
+
+        import time
+        first_ready = None
+
+        stream = sd.OutputStream(
+            samplerate=self._sample_rate,
+            channels=1,
+            dtype="float32",
+        )
+        self._stream = stream
+        try:
+            stream.start()
+        except Exception as e:
+            print(f"[tts] 流式播放打开失败，回退整段: {e}")
+            self._stream = None
+            try:
+                stream.close()
+            except Exception:
+                pass
+            self._speak_cosyvoice_whole(text, emotion)
+            return None
+
+        try:
+            for pcm in self._cosyvoice.synthesize_stream(text, emotion):
+                if self._stop_flag.is_set():
+                    break
+                self._current_pcm = pcm
+                data = np.ascontiguousarray(_apply_volume(pcm)).reshape(-1, 1)
+                stream.write(data)
+                if first_ready is None:
+                    first_ready = time.time()
+        except Exception:
+            # 被 stop() 打断或流式连接中断，正常退出
+            pass
+        finally:
+            if self._stop_flag.is_set():
+                try:
+                    stream.abort()
+                except Exception:
+                    pass
+            else:
+                try:
+                    stream.stop()
+                except Exception:
+                    pass
+            try:
+                stream.close()
+            except Exception:
+                pass
+            if self._stream is stream:
+                self._stream = None
+        return first_ready
+
+    def _speak_cosyvoice_whole(self, text: str, emotion: str | None = None):
+        """整段合成后一次播放（流式不可用时的回退）。"""
+        pcm = self._cosyvoice.synthesize(text, emotion)
+        if self._stop_flag.is_set():
+            return
+        pcm = _postprocess(pcm, self._sample_rate, 1.0)
+        sd.stop()
+        self._current_pcm = pcm
+        sd.play(_apply_volume(pcm), self._sample_rate)
+        sd.wait()
+
     def speak_text(self, text: str, emotion: str | None = None):
         """朗读文本（阻塞直到读完）。默认按句流式，可配置整段。
 
@@ -611,11 +723,16 @@ class TTS:
                     return
                 pcm = _mp3_to_pcm(mp3)
             elif self._engine == "cosyvoice" and self._cosyvoice is not None:
-                # CosyVoice 整段合成：一次请求、一次特征提取。按句拆分反而更慢，
-                # 因为每次请求都重复提取参考音频特征（固定开销 ~4-5s）。整段合成
-                # 只付一次固定开销，rtf 更低。
-                pcm = self._cosyvoice.synthesize(text, emotion)
-                pcm = _postprocess(pcm, self._sample_rate, 1.0)
+                # CosyVoice token 级流式：边合成边播放，首字延迟最低。
+                first_ready = self._speak_cosyvoice_stream(text, emotion)
+                if _debug_timing:
+                    t_done = time.time()
+                    if first_ready:
+                        print(f"[timing] TTS首字出声 {first_ready - t_synth_start:.2f}s | "
+                              f"整段播完 {t_done - t_synth_start:.2f}s（流式）")
+                    else:
+                        print(f"[timing] TTS流式播完 {t_done - t_synth_start:.2f}s")
+                return
             elif use_stream:
                 first_ready = self._speak_sherpa_stream(text)
                 if _debug_timing:

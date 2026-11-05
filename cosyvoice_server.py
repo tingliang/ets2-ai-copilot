@@ -203,6 +203,46 @@ def main():
         wav = _to_wav(pcm, sample_rate)
         return send_file(io.BytesIO(wav), mimetype="audio/wav")
 
+    @app.post("/tts_stream")
+    def tts_stream():
+        """Streaming TTS: synthesizes with stream=True and returns each audio
+        chunk as it is produced, so the client can start playing almost
+        immediately (first-token latency ~150ms-1s) instead of waiting for the
+        whole sentence. Each chunk is [4-byte big-endian length][WAV bytes].
+        """
+        from flask import Response, stream_with_context
+        data = request.get_json(force=True)
+        text = (data.get("text") or "").strip()
+        if not text:
+            return jsonify({"error": "empty text"}), 400
+
+        def generate():
+            try:
+                if not zero_shot_spk_id and not prompt_wav:
+                    yield b"\x00\x00\x00\x00"  # 0-length signals error; then stop
+                    return
+                for r in engine.inference_zero_shot(
+                    text, "", "", zero_shot_spk_id=zero_shot_spk_id, stream=True, speed=1.0
+                ):
+                    chunk_pcm = r["tts_speech"].numpy()
+                    if chunk_pcm.ndim == 3:
+                        chunk_pcm = chunk_pcm[0, 0]
+                    elif chunk_pcm.ndim == 2:
+                        chunk_pcm = chunk_pcm[0]
+                    wav_bytes = _to_wav(chunk_pcm.astype(np.float32), sample_rate)
+                    import struct
+                    yield struct.pack(">I", len(wav_bytes)) + wav_bytes
+            except Exception as e:
+                print(f"[cosyvoice] streaming synthesis failed: {e}", flush=True)
+                # Signal error with a 0-length frame; client should abort.
+                yield b"\x00\x00\x00\x00"
+
+        return Response(
+            stream_with_context(generate()),
+            mimetype="application/octet-stream",
+            headers={"X-Accel-Buffering": "no"},
+        )
+
     app.run(host=args.host, port=args.port, threaded=True)
 
 

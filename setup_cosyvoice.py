@@ -28,9 +28,16 @@ import sys
 BASE = os.path.dirname(os.path.abspath(__file__))
 VENV_DIR = os.path.join(BASE, "venv_cosyvoice")
 MODEL_DIR = os.path.join(BASE, "models", "CosyVoice2-0.5B")
+# Where the CosyVoice source repo (the `cosyvoice` python package + third_party submodules) lives.
+COSYVOICE_REPO_DIR = os.path.join(BASE, "models", "CosyVoice")
 
 # ModelScope repo id
 MODEL_ID = "iic/CosyVoice2-0.5B"
+
+# CosyVoice source repo. Official is FunAudioLLM/CosyVoice (now QwenAudio/CosyVoice);
+# ModelScope has a mirror that is faster from inside China.
+REPO_URL = "https://github.com/FunAudioLLM/CosyVoice.git"
+REPO_MIRROR = "https://www.modelscope.cn/models/FunAudioLLM/CosyVoice.git"
 
 # Dependency list (version-pinned, required by CosyVoice official).
 # torch is installed separately (cuda vs cpu); the rest are listed here.
@@ -79,6 +86,42 @@ def _has_cuda() -> bool:
             ).returncode == 0
         except Exception:
             return False
+
+
+def clone_repo() -> bool:
+    """Clone the CosyVoice source repo (contains the `cosyvoice` package).
+
+    The model download alone is NOT enough: `from cosyvoice.cli.cosyvoice import
+    CosyVoice2` needs the source code, and it also needs third_party submodules
+    (Matcha-TTS) on PYTHONPATH.
+    """
+    if os.path.exists(os.path.join(COSYVOICE_REPO_DIR, "cosyvoice")):
+        print(f"[repo] already exists: {COSYVOICE_REPO_DIR}")
+        return True
+
+    print(f"[repo] cloning CosyVoice source to {COSYVOICE_REPO_DIR} ...")
+    # Try the mirror first (faster in China), then the official URL.
+    for url in (REPO_MIRROR, REPO_URL):
+        if _run(["git", "clone", "--recursive", url, COSYVOICE_REPO_DIR], f"clone {url}"):
+            return True
+        # A partial/failed clone dir would block the next attempt; remove it.
+        if os.path.exists(COSYVOICE_REPO_DIR):
+            import shutil
+            shutil.rmtree(COSYVOICE_REPO_DIR, ignore_errors=True)
+    return False
+
+
+def update_submodules() -> bool:
+    """Ensure third_party submodules are present (idempotent)."""
+    if not os.path.isdir(COSYVOICE_REPO_DIR):
+        return clone_repo()
+    if os.path.isdir(os.path.join(COSYVOICE_REPO_DIR, "third_party", "Matcha-TTS")):
+        return True
+    print("[repo] fetching third_party submodules ...")
+    if not _run(["git", "submodule", "update", "--init", "--recursive"], "update submodules"):
+        print("[WARN] submodule update failed; see notes below")
+        return False
+    return True
 
 
 def setup_venv() -> bool:
@@ -164,6 +207,11 @@ def check() -> bool:
         ok = False
     else:
         print(f"[OK] venv: {py}")
+    if not os.path.exists(os.path.join(COSYVOICE_REPO_DIR, "cosyvoice")):
+        print(f"[X] CosyVoice source repo not found ({COSYVOICE_REPO_DIR})")
+        ok = False
+    else:
+        print(f"[OK] CosyVoice source: {COSYVOICE_REPO_DIR}")
     if not (os.path.isdir(MODEL_DIR) and os.path.exists(os.path.join(MODEL_DIR, "cosyvoice.yaml"))):
         print(f"[X] model not ready ({MODEL_DIR})")
         ok = False
@@ -178,6 +226,7 @@ def main():
     ap = argparse.ArgumentParser(description="CosyVoice2 one-click setup")
     ap.add_argument("--venv-only", action="store_true", help="only venv + deps")
     ap.add_argument("--model-only", action="store_true", help="only download model")
+    ap.add_argument("--repo-only", action="store_true", help="only clone CosyVoice source repo")
     ap.add_argument("--check", action="store_true", help="only check readiness")
     args = ap.parse_args()
 
@@ -187,8 +236,14 @@ def main():
         sys.exit(0 if download_model() else 1)
     if args.venv_only:
         sys.exit(0 if setup_venv() else 1)
+    if args.repo_only:
+        sys.exit(0 if (clone_repo() and update_submodules()) else 1)
 
     # Default: full flow
+    if not clone_repo():
+        sys.exit(1)
+    if not update_submodules():
+        print("[WARN] continuing anyway; if import fails, re-run with --repo-only")
     if not setup_venv():
         sys.exit(1)
     if not download_model():

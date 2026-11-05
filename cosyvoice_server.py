@@ -40,16 +40,25 @@ EMOTION_INSTRUCT = {
 
 
 def _load_engine(model_dir: str, device: str):
-    """加载 CosyVoice2 模型（首次调用时执行，耗时几秒~十几秒）。"""
-    sys.path.append(os.path.join(model_dir, "third_party", "Matcha-TTS"))
+    """Load the CosyVoice2 model (first call, takes seconds to tens of seconds)."""
+    # The `cosyvoice` package lives in the source repo (models/CosyVoice), NOT in the
+    # model dir. Add the repo root + its third_party/Matcha-TTS submodule to sys.path.
+    repo_dir = os.environ.get(
+        "COSYVOICE_REPO_DIR",
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "CosyVoice"),
+    )
+    for p in (repo_dir, os.path.join(repo_dir, "third_party", "Matcha-TTS")):
+        if os.path.isdir(p) and p not in sys.path:
+            sys.path.insert(0, p)
+
     from cosyvoice.cli.cosyvoice import CosyVoice2
 
     if device == "cuda":
-        # 有 N 卡用 fp16 加速（5080 16GB 绰绰有余）
+        # Use fp16 on NVIDIA GPU (5080's 16GB is more than enough).
         try:
             return CosyVoice2(model_dir, load_jit=False, load_trt=False, fp16=True)
         except Exception as e:
-            print(f"[cosyvoice] CUDA fp16 加载失败（{e}），回退 CPU")
+            print(f"[cosyvoice] CUDA fp16 load failed ({e}); falling back to CPU")
     return CosyVoice2(model_dir, load_jit=False, load_trt=False, fp16=False)
 
 

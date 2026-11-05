@@ -18,8 +18,23 @@
 
 ## 三、安装步骤
 
-> 最省事的方式：直接双击 `setup_cosyvoice.bat`，它会自动跑完「建 venv → 装依赖 → 下模型」。
+> 最省事的方式：直接双击 `setup_cosyvoice.bat`，它会自动跑完「克隆仓库 → 建 venv → 装依赖 → 下模型」。
 > 下面的手动步骤是给脚本装失败时对照用的。
+
+### 第 0 步（关键，常被漏掉）：克隆 CosyVoice 源码仓库
+
+> ⚠️ 这一步最容易漏。只下模型是不够的——`from cosyvoice.cli.cosyvoice import CosyVoice2` 需要的是 **CosyVoice 的源码代码**（里面的 `cosyvoice/` Python 包），它不在 pip 里，也不在模型文件里。
+
+```cmd
+cd /d 你的项目路径\models
+git clone --recursive https://github.com/FunAudioLLM/CosyVoice.git CosyVoice
+:: 国内镜像更快（二选一）：
+git clone --recursive https://www.modelscope.cn/models/FunAudioLLM/CosyVoice.git CosyVoice
+```
+
+- `--recursive` 很重要，会拉 `third_party/Matcha-TTS` 等子模块，运行时必需。
+- 子模块失败时在 `CosyVoice` 目录内执行：`git submodule update --init --recursive`
+- 脚本会自动克隆到 `models/CosyVoice/`，你也可以手动放这个位置。
 
 ### 第 1 步：创建独立虚拟环境
 

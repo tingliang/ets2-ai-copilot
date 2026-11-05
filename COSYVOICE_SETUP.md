@@ -34,7 +34,7 @@ It performs the full flow automatically:
 
 1. **Clone** the CosyVoice source repo → `models/CosyVoice/` (with `--recursive` for the `third_party/Matcha-TTS` submodule)
 2. **Create** the isolated venv `venv_cosyvoice/`
-3. **Install** torch 2.3.1 + torchaudio 2.3.1 (CUDA 12.1 if an NVIDIA GPU is detected, else CPU)
+3. **Install** torch + torchaudio (version auto-selected: **2.7.0 + CUDA 12.8** if an RTX 50-series GPU is detected, else the official-pinned 2.3.1; CPU build if no GPU)
 4. **Install** the official CosyVoice `requirements.txt` (conformer, hydra-core, omegaconf, pyworld, transformers, etc. — `wetext`/pynini are intentionally skipped, see below)
 5. **Install** `openai-whisper` with a legacy build (`--no-build-isolation` + `setuptools<81`)
 6. **Download** the model → `models/CosyVoice2-0.5B/` (HuggingFace first, ModelScope fallback)
@@ -108,6 +108,19 @@ which is negligible for casual conversation.
 **Q: CPU is too slow?**
 Expected. CosyVoice is a 0.5B model; on CPU synthesis is slower than real-time
 (2–3 s per sentence). Use GPU (CUDA torch) if possible.
+
+**Q: `CUDA error: no kernel image is available for execution on the device`?**
+You have an RTX 50-series (Blackwell, sm_120) GPU, but an old torch (2.3.1) that
+only supports up to sm_90. The setup script auto-detects this and installs
+**torch 2.7.0 + CUDA 12.8** (`cu128`). To fix an existing install, run:
+
+```cmd
+venv_cosyvoice\Scripts\python.exe -m pip uninstall -y torch torchaudio
+venv_cosyvoice\Scripts\python.exe -m pip install torch==2.7.0 torchaudio==2.7.0 --index-url https://download.pytorch.org/whl/cu128
+```
+
+The `cu128` wheels are large (~2.5 GB+, they bundle CUDA runtime + cuDNN), so be
+patient. Re-run and the error is gone.
 
 **Q: Switch back to the old voice?**
 Set `TTS_ENGINE=sherpa` in `.env`. You can switch any time.

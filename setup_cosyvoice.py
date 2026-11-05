@@ -45,9 +45,15 @@ REPO_URL = "https://github.com/FunAudioLLM/CosyVoice.git"
 HF_MODEL_ID = "FunAudioLLM/CosyVoice2-0.5B"
 MS_MODEL_ID = "iic/CosyVoice2-0.5B"
 
-# torch / torchaudio version pinned to the official requirements.
+# torch / torchaudio version pinned to the official requirements. These are the
+# versions CosyVoice was tested against, BUT they do NOT support NVIDIA Blackwell
+# (RTX 50-series, sm_120) GPUs. For those we must use torch 2.7.0 + cu128.
 TORCH_VERSION = "2.3.1"
 TORCHAUDIO_VERSION = "2.3.1"
+
+# Blackwell (RTX 50-series) needs torch >= 2.7 with CUDA 12.8 (cu128).
+BLACKWELL_TORCH_VERSION = "2.7.0"
+BLACKWELL_TORCHAUDIO_VERSION = "2.7.0"
 
 # Minimal extras for our own cosyvoice_server.py HTTP wrapper.
 EXTRA_PACKAGES = [
@@ -85,6 +91,37 @@ def _has_cuda() -> bool:
             return False
 
 
+def _gpu_needs_cu128() -> bool:
+    """Return True if the GPU is a Blackwell (RTX 50-series) card.
+
+    Blackwell has compute capability sm_120, which only torch >= 2.7 (CUDA 12.8)
+    supports. CosyVoice's pinned torch 2.3.1 supports at most sm_90, so running on
+    a 50-series card yields "CUDA error: no kernel image is available".
+    We detect this via nvidia-smi's GPU name (e.g. "GeForce RTX 5080").
+    """
+    try:
+        out = subprocess.run(
+            ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+            capture_output=True, text=True, timeout=10
+        )
+        if out.returncode != 0:
+            return False
+        names = out.stdout.strip()
+        if not names:
+            return False
+        # Match RTX 50-series (5060/5070/5080/5090) and any sm_120 part.
+        import re
+        for name in names.splitlines():
+            m = re.search(r"RTX\s*50(\d\d)", name, re.IGNORECASE)
+            if m:
+                return True
+            if "sm_120" in name.lower() or "blackwell" in name.lower():
+                return True
+        return False
+    except Exception:
+        return False
+
+
 def clone_repo() -> bool:
     """Clone the CosyVoice source repo (contains the `cosyvoice` package)."""
     if os.path.exists(os.path.join(COSYVOICE_REPO_DIR, "cosyvoice")):
@@ -114,14 +151,23 @@ def update_submodules() -> bool:
 
 def _install_deps(py: str) -> None:
     """Install torch + CosyVoice requirements into the venv (idempotent)."""
-    # torch (cuda if NVIDIA GPU detected, otherwise cpu), pinned to official version.
+    # torch: choose the right version + CUDA build for the detected GPU.
     print("\n>>> detecting GPU ...")
     if _has_cuda():
-        print("    NVIDIA GPU detected, installing torch + torchaudio (CUDA 12.1 build)")
-        _run([py, "-m", "pip", "install",
-              f"torch=={TORCH_VERSION}", f"torchaudio=={TORCHAUDIO_VERSION}",
-              "--index-url", "https://download.pytorch.org/whl/cu121"],
-             "install torch (CUDA, large, be patient)")
+        if _gpu_needs_cu128():
+            # Blackwell (RTX 50-series): torch 2.3.1 has no sm_120 kernel.
+            print("    NVIDIA Blackwell GPU (RTX 50-series) detected; installing torch "
+                  f"{BLACKWELL_TORCH_VERSION} + torchaudio {BLACKWELL_TORCHAUDIO_VERSION} (CUDA 12.8)")
+            _run([py, "-m", "pip", "install",
+                  f"torch=={BLACKWELL_TORCH_VERSION}", f"torchaudio=={BLACKWELL_TORCHAUDIO_VERSION}",
+                  "--index-url", "https://download.pytorch.org/whl/cu128"],
+                 "install torch (CUDA 12.8, large, be patient)")
+        else:
+            print("    NVIDIA GPU detected, installing torch + torchaudio (CUDA 12.1 build)")
+            _run([py, "-m", "pip", "install",
+                  f"torch=={TORCH_VERSION}", f"torchaudio=={TORCHAUDIO_VERSION}",
+                  "--index-url", "https://download.pytorch.org/whl/cu121"],
+                 "install torch (CUDA, large, be patient)")
     else:
         print("    no GPU detected, installing torch + torchaudio (CPU build)")
         _run([py, "-m", "pip", "install",

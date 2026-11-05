@@ -3,14 +3,14 @@ setlocal
 cd /d "%~dp0"
 
 echo ============================================================
-echo   CosyVoice2 - 自然情感语音 一键安装
-echo   （会额外下载约 4.5GB 模型，请确保磁盘空间充足）
+echo   CosyVoice2 - natural emotional TTS - one-click setup
+echo   (downloads ~4.5GB model, make sure you have enough disk space)
 echo ============================================================
 echo.
 
 where python >nul 2>&1
 if errorlevel 1 (
-    echo [ERROR] Python not found. 请先安装 Python 3.11 并加入 PATH。
+    echo [ERROR] Python not found. Install Python 3.11 and add it to PATH first.
     pause
     exit /b 1
 )
@@ -18,12 +18,12 @@ if errorlevel 1 (
 python setup_cosyvoice.py
 if errorlevel 1 (
     echo.
-    echo [ERROR] 安装失败，请查看上方错误信息。
+    echo [ERROR] Setup failed, see the error messages above.
     pause
     exit /b 1
 )
 
 echo.
-echo 安装完成！请编辑 .env，把 TTS_ENGINE 改为 cosyvoice。
-echo 改完后重启 start.bat 生效。
+echo Setup complete! Edit .env and set TTS_ENGINE=cosyvoice.
+echo Then restart start.bat to take effect.
 pause

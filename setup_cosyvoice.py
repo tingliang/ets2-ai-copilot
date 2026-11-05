@@ -1,20 +1,22 @@
 # -*- coding: utf-8 -*-
 """
-CosyVoice2（自然情感语音）一键安装脚本。
+CosyVoice2 (natural emotional TTS) one-click setup script.
 
-在项目下创建一个独立 venv（venv_cosyvoice/），安装 CosyVoice2 依赖，
-并从 ModelScope 下载模型到 models/CosyVoice2-0.5B。
+Creates an isolated venv (venv_cosyvoice/) under the project, installs
+CosyVoice2 dependencies, and downloads the model from ModelScope to
+models/CosyVoice2-0.5B.
 
-为什么独立 venv：CosyVoice2 依赖 torch + transformers(锁版本) + pynini/
-WeTextProcessing，和主程序的 faster-whisper / sherpa-onnx 会冲突，必须隔离。
+Why an isolated venv: CosyVoice2 pins torch + transformers + pynini /
+WeTextProcessing, which conflict with the main program's faster-whisper /
+sherpa-onnx, so they must be kept separate.
 
-用法：
-    python setup_cosyvoice.py            # 全自动：建 venv + 装依赖 + 下模型
-    python setup_cosyvoice.py --venv-only      # 只建 venv + 装依赖
-    python setup_cosyvoice.py --model-only     # 只下模型
-    python setup_cosyvoice.py --check          # 只检查环境是否就绪
+Usage:
+    python setup_cosyvoice.py                 # full: venv + deps + model
+    python setup_cosyvoice.py --venv-only     # only venv + deps
+    python setup_cosyvoice.py --model-only    # only download model
+    python setup_cosyvoice.py --check         # only check readiness
 
-装完后在 .env 里设 TTS_ENGINE=cosyvoice 即可启用（子进程起不来自动回退 sherpa）。
+After setup, set TTS_ENGINE=cosyvoice in .env to enable (auto-fallback to sherpa).
 """
 from __future__ import annotations
 
@@ -27,11 +29,11 @@ BASE = os.path.dirname(os.path.abspath(__file__))
 VENV_DIR = os.path.join(BASE, "venv_cosyvoice")
 MODEL_DIR = os.path.join(BASE, "models", "CosyVoice2-0.5B")
 
-# ModelScope 仓库
+# ModelScope repo id
 MODEL_ID = "iic/CosyVoice2-0.5B"
 
-# 依赖清单（版本锁定，CosyVoice 官方要求）
-# 注意：torch 单独装（选 cuda/cpu 版本），这里列其余依赖
+# Dependency list (version-pinned, required by CosyVoice official).
+# torch is installed separately (cuda vs cpu); the rest are listed here.
 PIP_MIRROR = "https://pypi.tuna.tsinghua.edu.cn/simple"
 
 PACKAGES = [
@@ -51,12 +53,10 @@ PACKAGES = [
 
 
 def _venv_python() -> str:
-    """返回独立 venv 的 python 路径（Windows/Linux 自适应）。"""
+    """Return the python executable path inside the isolated venv."""
     if sys.platform == "win32":
-        p = os.path.join(VENV_DIR, "Scripts", "python.exe")
-    else:
-        p = os.path.join(VENV_DIR, "bin", "python")
-    return p
+        return os.path.join(VENV_DIR, "Scripts", "python.exe")
+    return os.path.join(VENV_DIR, "bin", "python")
 
 
 def _run(cmd: list[str], desc: str) -> bool:
@@ -66,109 +66,119 @@ def _run(cmd: list[str], desc: str) -> bool:
     return r.returncode == 0
 
 
-def setup_venv() -> bool:
-    """创建独立 venv 并装依赖。"""
-    py = _venv_python()
-    if os.path.exists(py):
-        print(f"[venv] 已存在：{py}")
-        return True
-
-    print(f"[venv] 创建独立环境 {VENV_DIR} …")
-    if not _run([sys.executable, "-m", "venv", VENV_DIR], "创建 venv"):
-        print("[错误] venv 创建失败，请确认 Python 已安装并支持 venv 模块")
-        return False
-
-    # 升级 pip
-    _run([py, "-m", "pip", "install", "--upgrade", "pip", "-i", PIP_MIRROR], "升级 pip")
-
-    # 装 torch（先探测是否有 N 卡，决定装 cuda 版还是 cpu 版）
-    print("\n>>> 检测 GPU …")
-    has_cuda = False
+def _has_cuda() -> bool:
+    """Detect whether an NVIDIA GPU is available."""
     try:
         import ctypes
-        has_cuda = ctypes.windll.kernel32.LoadLibraryW("nvcuda.dll") is not None
+        ctypes.windll.kernel32.LoadLibraryW("nvcuda.dll")
+        return True
     except Exception:
         try:
-            has_cuda = subprocess.run(
+            return subprocess.run(
                 ["nvidia-smi"], capture_output=True, timeout=5
             ).returncode == 0
         except Exception:
-            has_cuda = False
-    if has_cuda:
-        torch_pkg = "torch"  # 默认 wheel 自带 cuda（或按需改 cu121 版）
-        print("    检测到 NVIDIA GPU，安装 torch（cuda 版）")
+            return False
+
+
+def setup_venv() -> bool:
+    """Create the isolated venv and install dependencies."""
+    py = _venv_python()
+    if os.path.exists(py):
+        print(f"[venv] already exists: {py}")
+        return True
+
+    print(f"[venv] creating isolated environment {VENV_DIR} ...")
+    if not _run([sys.executable, "-m", "venv", VENV_DIR], "create venv"):
+        print("[ERROR] venv creation failed; make sure Python supports the venv module")
+        return False
+
+    # Upgrade pip
+    _run([py, "-m", "pip", "install", "--upgrade", "pip", "-i", PIP_MIRROR], "upgrade pip")
+
+    # Install torch (cuda if NVIDIA GPU is detected, otherwise cpu)
+    print("\n>>> detecting GPU ...")
+    if _has_cuda():
+        torch_pkg = "torch"
+        print("    NVIDIA GPU detected, installing torch (cuda build)")
     else:
         torch_pkg = "torch"
-        print("    未检测到 GPU，安装 torch（cpu 版）")
+        print("    no GPU detected, installing torch (cpu build)")
 
-    # 装 torch 和其余依赖
-    _run([py, "-m", "pip", "install", torch_pkg, "-i", PIP_MIRROR], "安装 torch（较大，耐心等待）")
+    _run([py, "-m", "pip", "install", torch_pkg, "-i", PIP_MIRROR], "install torch (large, be patient)")
     for pkg in PACKAGES:
-        if not _run([py, "-m", "pip", "install", pkg, "-i", PIP_MIRROR], f"安装 {pkg}"):
-            print(f"[警告] {pkg} 安装失败，继续尝试后续包")
+        if not _run([py, "-m", "pip", "install", pkg, "-i", PIP_MIRROR], f"install {pkg}"):
+            print(f"[WARN] {pkg} install failed, continuing with remaining packages")
 
-    # pynini（Windows 需要 conda 或预编译 wheel，这里尝试 pip，失败提示）
-    print("\n>>> 安装 pynini（Windows 上可能需 conda，见文末说明）")
-    if not _run([py, "-m", "pip", "install", "pynini==2.1.5", "-i", PIP_MIRROR], "安装 pynini"):
-        print("[警告] pynini 安装失败。若 WeTextProcessing 报错，请用 conda 安装：")
+    # pynini (on Windows may need conda or a prebuilt wheel; try pip, warn on failure)
+    print("\n>>> installing pynini (may need conda on Windows, see notes below)")
+    if not _run([py, "-m", "pip", "install", "pynini==2.1.5", "-i", PIP_MIRROR], "install pynini"):
+        print("[WARN] pynini install failed. If WeTextProcessing errors, install via conda:")
         print("        conda install -c conda-forge pynini==2.1.5")
 
     _run([py, "-m", "pip", "install", "WeTextProcessing", "--no-deps", "-i", PIP_MIRROR],
-         "安装 WeTextProcessing")
+         "install WeTextProcessing")
 
-    print("\n[venv] 依赖安装完成 ✓")
+    print("\n[venv] dependencies installed OK")
     return True
 
 
 def download_model() -> bool:
-    """从 ModelScope 下载 CosyVoice2-0.5B 模型。"""
+    """Download the CosyVoice2-0.5B model from ModelScope."""
     if os.path.isdir(MODEL_DIR) and os.path.exists(os.path.join(MODEL_DIR, "cosyvoice.yaml")):
-        print(f"[model] 已存在：{MODEL_DIR}")
+        print(f"[model] already exists: {MODEL_DIR}")
         return True
 
-    print(f"[model] 从 ModelScope 下载 {MODEL_ID}（约 4.5GB，请耐心等待）…")
+    print(f"[model] downloading {MODEL_ID} from ModelScope (~4.5GB, be patient) ...")
     py = _venv_python() if os.path.exists(_venv_python()) else sys.executable
-    # 用 modelscope SDK 下载；优先 venv 里的（若已装 modelscope）
+
+    # Install modelscope SDK first (may not be present).
+    _run([py, "-m", "pip", "install", "modelscope", "-i", PIP_MIRROR], "install modelscope SDK")
+
+    # Pass the model dir via an environment variable to avoid any backslash
+    # escaping issues in the `-c` inline code on Windows.
+    env = dict(os.environ)
+    env["COSYVOICE_MODEL_DIR"] = MODEL_DIR
     code = (
+        "import os\n"
         "from modelscope import snapshot_download\n"
-        f"snapshot_download('{MODEL_ID}', local_dir=r'{MODEL_DIR}')\n"
-        f"print('模型已下载到 {MODEL_DIR}')\n"
+        "model_dir = os.environ['COSYVOICE_MODEL_DIR']\n"
+        "snapshot_download('" + MODEL_ID + "', local_dir=model_dir)\n"
+        "print('model downloaded to', model_dir)\n"
     )
-    # modelscope 可能没装，先尝试装
-    _run([py, "-m", "pip", "install", "modelscope", "-i", PIP_MIRROR], "安装 modelscope SDK")
-    r = subprocess.run([py, "-c", code], cwd=BASE)
+    r = subprocess.run([py, "-c", code], cwd=BASE, env=env)
     if r.returncode != 0:
-        print("[错误] 模型下载失败，可手动从以下地址下载后解压：")
+        print("[ERROR] model download failed; you can download and extract manually from:")
         print(f"        https://www.modelscope.cn/models/{MODEL_ID}")
-        print(f"    解压到 {MODEL_DIR}")
+        print(f"    then extract to {MODEL_DIR}")
         return False
     return True
 
 
 def check() -> bool:
-    """检查环境是否就绪。"""
+    """Check whether the environment is ready."""
     ok = True
     py = _venv_python()
     if not os.path.exists(py):
-        print("[✗] 未找到独立 venv（venv_cosyvoice）")
+        print("[X] venv not found (venv_cosyvoice)")
         ok = False
     else:
-        print(f"[✓] venv: {py}")
+        print(f"[OK] venv: {py}")
     if not (os.path.isdir(MODEL_DIR) and os.path.exists(os.path.join(MODEL_DIR, "cosyvoice.yaml"))):
-        print(f"[✗] 模型未就绪（{MODEL_DIR}）")
+        print(f"[X] model not ready ({MODEL_DIR})")
         ok = False
     else:
-        print(f"[✓] 模型: {MODEL_DIR}")
+        print(f"[OK] model: {MODEL_DIR}")
     if ok:
-        print("\n环境就绪！在 .env 里设 TTS_ENGINE=cosyvoice 即可启用。")
+        print("\nEnvironment ready! Set TTS_ENGINE=cosyvoice in .env to enable.")
     return ok
 
 
 def main():
-    ap = argparse.ArgumentParser(description="CosyVoice2 一键安装")
-    ap.add_argument("--venv-only", action="store_true", help="只建 venv + 装依赖")
-    ap.add_argument("--model-only", action="store_true", help="只下载模型")
-    ap.add_argument("--check", action="store_true", help="只检查环境")
+    ap = argparse.ArgumentParser(description="CosyVoice2 one-click setup")
+    ap.add_argument("--venv-only", action="store_true", help="only venv + deps")
+    ap.add_argument("--model-only", action="store_true", help="only download model")
+    ap.add_argument("--check", action="store_true", help="only check readiness")
     args = ap.parse_args()
 
     if args.check:
@@ -178,17 +188,17 @@ def main():
     if args.venv_only:
         sys.exit(0 if setup_venv() else 1)
 
-    # 默认全流程
+    # Default: full flow
     if not setup_venv():
         sys.exit(1)
     if not download_model():
         sys.exit(1)
     print("\n============================================")
-    print("  CosyVoice2 安装完成 ✓")
-    print("  下一步：")
-    print("    1. 编辑 .env，设 TTS_ENGINE=cosyvoice")
-    print("    2. 重启 start.bat")
-    print("  若启动失败会自动回退 sherpa，不影响使用。")
+    print("  CosyVoice2 setup complete")
+    print("  Next steps:")
+    print("    1. edit .env, set TTS_ENGINE=cosyvoice")
+    print("    2. restart start.bat")
+    print("  (auto-falls back to sherpa on startup failure)")
     print("============================================")
 
 

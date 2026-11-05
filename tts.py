@@ -303,6 +303,9 @@ class _CosyVoiceTTS:
             try:
                 r = self._requests.get(f"{self._url}/health", timeout=2)
                 if r.status_code == 200 and r.json().get("ok"):
+                    sr = r.json().get("sample_rate")
+                    if sr:
+                        self.sample_rate = int(sr)  # 以子进程实际采样率为准
                     return True
             except Exception:
                 pass

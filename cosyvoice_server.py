@@ -1,22 +1,23 @@
 # -*- coding: utf-8 -*-
 """
-CosyVoice 2 语音合成子进程服务。
+CosyVoice2 text-to-speech subprocess server.
 
-为什么独立子进程：
-- CosyVoice2 依赖重（torch + transformers 锁版本 + pynini/WeTextProcessing），
-  与主程序的 faster-whisper / sherpa-onnx 会冲突，必须隔离环境。
-- 模型加载要几秒~十几秒，必须常驻，不能每次说话重新初始化。
-- 主程序通过 HTTP 调用；本服务起不来时主程序自动回退 sherpa 引擎，不卡死。
+Why a separate subprocess:
+- CosyVoice2 has heavy deps (torch + pinned transformers + pynini/WeTextProcessing)
+  that conflict with the main program's faster-whisper / sherpa-onnx.
+- Model loading takes seconds to tens of seconds and must stay resident.
+- The main program calls it over HTTP; if it fails to start, the main program
+  auto-falls back to the sherpa engine.
 
-对外接口（HTTP，默认 127.0.0.1:9860）：
-  GET  /health         -> {"ok": true, "engine": "cosyvoice2"}
-  POST /tts            -> JSON body {"text": "...", "emotion": "happy", "speed": 1.0}
-                          返回 WAV 字节（audio/wav），单声道 24kHz float→16bit PCM。
+HTTP API (default 127.0.0.1:9860):
+  GET  /health  -> {"ok": true, "engine": "cosyvoice2", "sample_rate": 24000}
+  POST /tts     -> JSON {"text": "...", "emotion": "happy", "speed": 1.0}
+                   returns WAV bytes (audio/wav), mono 24kHz float -> 16-bit PCM.
 
-情绪 → CosyVoice 自然语言指令（与主程序 parse_emotion 的 key 对应）：
-  happy/surprised/sad/angry/calm -> 对应的「语气」指令，由模型自身演绎。
+Emotion -> natural-language instruction (keys match parse_emotion in main.py):
+  happy/surprised/sad/angry/calm/idle -> an instruction the model interprets.
 
-运行方式（由 setup_cosyvoice.py 装好独立 venv 后）：
+Run (after setup_cosyvoice.py installs the venv):
   venv_cosyvoice/Scripts/python.exe cosyvoice_server.py
 """
 from __future__ import annotations
@@ -27,7 +28,8 @@ import os
 import sys
 import wave
 
-# 情绪 -> CosyVoice instruct 提示词（自然语言控制语气）
+# Emotion -> CosyVoice instruct prompt (natural language controls the tone).
+# The instruct text is passed as prompt_text to inference_instruct2 / zero-shot.
 EMOTION_INSTRUCT = {
     "happy": "用开心、轻快、上扬的语气说这句话",
     "surprised": "用惊讶、好奇、语气上扬地说这句话",
@@ -35,35 +37,42 @@ EMOTION_INSTRUCT = {
     "angry": "用有点生气、不耐烦、语气急促地说这句话",
     "calm": "用平静、自然、日常聊天的语气说这句话",
     "idle": "用平静、自然、日常聊天的语气说这句话",
-    None: None,
 }
+
+# CosyVoice2 is a zero-shot model: it has no built-in speaker (no spk2info.pt),
+# so every synthesis needs a reference audio (prompt_wav). The official repo
+# ships one at <repo>/asset/zero_shot_prompt.wav, cloned together with the repo.
+_PROMPT_WAV = os.path.join("asset", "zero_shot_prompt.wav")
+
+
+def _resolve_repo_dir() -> str:
+    """Locate the CosyVoice source repo (contains the `cosyvoice` package)."""
+    env = os.environ.get("COSYVOICE_REPO_DIR")
+    if env:
+        return env
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "CosyVoice")
 
 
 def _load_engine(model_dir: str, device: str):
-    """Load the CosyVoice2 model (first call, takes seconds to tens of seconds)."""
-    # The `cosyvoice` package lives in the source repo (models/CosyVoice), NOT in the
-    # model dir. Add the repo root + its third_party/Matcha-TTS submodule to sys.path.
-    repo_dir = os.environ.get(
-        "COSYVOICE_REPO_DIR",
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "CosyVoice"),
-    )
+    """Load the CosyVoice2 model via AutoModel (auto-detects cosyvoice2.yaml)."""
+    repo_dir = _resolve_repo_dir()
+    # The `cosyvoice` package lives in the source repo, plus its third_party submodule.
     for p in (repo_dir, os.path.join(repo_dir, "third_party", "Matcha-TTS")):
         if os.path.isdir(p) and p not in sys.path:
             sys.path.insert(0, p)
 
-    from cosyvoice.cli.cosyvoice import CosyVoice2
+    from cosyvoice.cli.cosyvoice import AutoModel
 
+    kwargs = {"model_dir": model_dir, "load_jit": False, "load_trt": False}
     if device == "cuda":
-        # Use fp16 on NVIDIA GPU (5080's 16GB is more than enough).
-        try:
-            return CosyVoice2(model_dir, load_jit=False, load_trt=False, fp16=True)
-        except Exception as e:
-            print(f"[cosyvoice] CUDA fp16 load failed ({e}); falling back to CPU")
-    return CosyVoice2(model_dir, load_jit=False, load_trt=False, fp16=False)
+        # fp16 halves memory and speeds up inference on NVIDIA GPUs.
+        # AutoModel/CosyVoice2 already auto-disables fp16 if CUDA is unavailable.
+        kwargs["fp16"] = True
+    return AutoModel(**kwargs)
 
 
 def _to_wav(pcm, sample_rate: int) -> bytes:
-    """float32 PCM -> 16bit WAV 字节。"""
+    """float32 PCM -> 16-bit WAV bytes."""
     import numpy as np
     pcm = np.asarray(pcm, dtype=np.float32)
     pcm = np.clip(pcm, -1.0, 1.0)
@@ -77,11 +86,25 @@ def _to_wav(pcm, sample_rate: int) -> bytes:
     return buf.getvalue()
 
 
+def _prompt_wav_path() -> str:
+    """Return an existing reference wav; None if not found."""
+    repo_dir = _resolve_repo_dir()
+    candidates = [
+        os.path.join(repo_dir, _PROMPT_WAV),
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), _PROMPT_WAV),
+    ]
+    for c in candidates:
+        if os.path.isfile(c):
+            return c
+    return None
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=9860)
-    ap.add_argument("--model-dir", default="", help="CosyVoice2 模型目录")
+    ap.add_argument("--model-dir", default="", help="CosyVoice2 model dir")
+    ap.add_argument("--prompt-wav", default="", help="reference audio for zero-shot/instruct")
     ap.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu"])
     args = ap.parse_args()
 
@@ -89,8 +112,9 @@ def main():
         "COSYVOICE_MODEL_DIR",
         os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "CosyVoice2-0.5B"),
     )
+    prompt_wav = args.prompt_wav or _prompt_wav_path()
 
-    # 设备自动探测
+    # Auto-detect device
     device = args.device
     if device == "auto":
         try:
@@ -99,12 +123,16 @@ def main():
         except Exception:
             device = "cpu"
 
-    print(f"[cosyvoice] 加载模型 {model_dir}（设备 {device}）…", flush=True)
+    print(f"[cosyvoice] loading model {model_dir} (device {device}) ...", flush=True)
     engine = _load_engine(model_dir, device)
-    sample_rate = engine.sample_rate  # CosyVoice 默认 24k
-    print(f"[cosyvoice] 模型就绪，采样率 {sample_rate}，监听 {args.host}:{args.port}", flush=True)
+    sample_rate = engine.sample_rate  # CosyVoice default 24k
+    if prompt_wav:
+        print(f"[cosyvoice] reference audio: {prompt_wav}", flush=True)
+    else:
+        print("[cosyvoice] WARNING: no reference audio found; instruct/zero-shot will fail", flush=True)
+    print(f"[cosyvoice] ready, sample rate {sample_rate}, listening on {args.host}:{args.port}", flush=True)
 
-    # 惰性 import，避免 torch 等重依赖在启动前就加载
+    # Lazy import to avoid loading torch before startup completes.
     from flask import Flask, request, jsonify, send_file
 
     app = Flask(__name__)
@@ -122,23 +150,26 @@ def main():
         emotion = data.get("emotion") or None
         speed = float(data.get("speed") or 1.0)
 
-        # 情绪指令：用 inference_instruct2 做自然语言情感控制（不依赖参考音频）
         instruct = EMOTION_INSTRUCT.get(emotion)
         try:
             import numpy as np
-            if instruct:
-                # 带情绪：inference_instruct2(text, instruct, prompt_speech=None)
-                # prompt_speech=None 用预训练音色（不克隆），instruct 控制语气
+            if instruct and prompt_wav:
+                # Emotional tone via instruct2: prompt_wav provides the voice,
+                # instruct_text (as prompt_text) controls the delivery.
                 results = list(
-                    engine.inference_instruct2(text, instruct, prompt_speech=None, stream=False)
+                    engine.inference_instruct2(text, instruct, prompt_wav, stream=False, speed=speed)
                 )
-                pcm = np.concatenate([r["tts_speech"].numpy() for r in results]) if results else np.zeros(0, dtype=np.float32)
+            elif prompt_wav:
+                # No emotion: plain zero-shot with the reference voice.
+                results = list(
+                    engine.inference_zero_shot(text, "", prompt_wav, stream=False, speed=speed)
+                )
             else:
-                # 无情绪：直接预训练音色合成（inference_sft）
-                results = list(engine.inference_sft(text, stream=False, speed=speed))
-                pcm = np.concatenate([r["tts_speech"].numpy() for r in results]) if results else np.zeros(0, dtype=np.float32)
+                return jsonify({"error": "no reference audio (prompt_wav) available"}), 500
+
+            pcm = np.concatenate([r["tts_speech"].numpy() for r in results]) if results else np.zeros(0, dtype=np.float32)
         except Exception as e:
-            print(f"[cosyvoice] 合成失败: {e}", flush=True)
+            print(f"[cosyvoice] synthesis failed: {e}", flush=True)
             return jsonify({"error": str(e)}), 500
 
         wav = _to_wav(pcm, sample_rate)

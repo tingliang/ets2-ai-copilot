@@ -588,6 +588,87 @@ class TTS:
         sd.play(_apply_volume(pcm), self._sample_rate)
         sd.wait()
 
+    def _speak_cosyvoice_stream(self, text: str, emotion: str | None = None):
+        """按句流式朗读 CosyVoice：逐句「合成 → 写入输出流」，首句最快出声。
+
+        与 sherpa 的按句流式同构，但合成走 CosyVoice 子进程（HTTP）。
+        CosyVoice 单句合成本身要 1~3s，逐句串行写入同一个 OutputStream，
+        第一句合成完即可开始播放，避免「整段合成完才播」的整段延迟。
+        """
+        sents = _split_sentences(text)
+        if not sents:
+            return None
+
+        # 清掉上一次可能残留的播放
+        sd.stop()
+
+        import time
+        first_ready = None  # 第一句写入成功的时间（用于统计首句延迟）
+
+        stream = sd.OutputStream(
+            samplerate=self._sample_rate,
+            channels=1,
+            dtype="float32",
+        )
+        self._stream = stream
+        try:
+            stream.start()
+        except Exception as e:
+            print(f"[tts] 流式播放打开失败，回退整段: {e}")
+            self._stream = None
+            try:
+                stream.close()
+            except Exception:
+                pass
+            self._speak_cosyvoice_whole(text, emotion)
+            return None
+
+        try:
+            for s in sents:
+                if self._stop_flag.is_set():
+                    break
+                pcm = self._cosyvoice.synthesize(s, emotion)
+                if self._stop_flag.is_set():
+                    break
+                pcm = _postprocess(pcm, self._sample_rate, 1.0)
+                self._current_pcm = pcm
+                data = np.ascontiguousarray(_apply_volume(pcm)).reshape(-1, 1)
+                stream.write(data)
+                if first_ready is None:
+                    first_ready = time.time()
+        except Exception:
+            # 被 stop() 打断（abort/close）或设备异常，正常退出
+            pass
+        finally:
+            if self._stop_flag.is_set():
+                try:
+                    stream.abort()
+                except Exception:
+                    pass
+            else:
+                try:
+                    stream.stop()
+                except Exception:
+                    pass
+            try:
+                stream.close()
+            except Exception:
+                pass
+            if self._stream is stream:
+                self._stream = None
+        return first_ready
+
+    def _speak_cosyvoice_whole(self, text: str, emotion: str | None = None):
+        """整段合成后一次播放（流式不可用时的回退）。"""
+        pcm = self._cosyvoice.synthesize(text, emotion)
+        if self._stop_flag.is_set():
+            return
+        pcm = _postprocess(pcm, self._sample_rate, 1.0)
+        sd.stop()
+        self._current_pcm = pcm
+        sd.play(_apply_volume(pcm), self._sample_rate)
+        sd.wait()
+
     def speak_text(self, text: str, emotion: str | None = None):
         """朗读文本（阻塞直到读完）。默认按句流式，可配置整段。
 
@@ -611,9 +692,16 @@ class TTS:
                     return
                 pcm = _mp3_to_pcm(mp3)
             elif self._engine == "cosyvoice" and self._cosyvoice is not None:
-                # CosyVoice 整段合成（保留整句韵律 + 情绪），一次播放
-                pcm = self._cosyvoice.synthesize(text, emotion)
-                pcm = _postprocess(pcm, self._sample_rate, 1.0)
+                # CosyVoice 按句流式：逐句合成并写入输出流，首句最快出声。
+                first_ready = self._speak_cosyvoice_stream(text, emotion)
+                if _debug_timing:
+                    t_done = time.time()
+                    if first_ready:
+                        print(f"[timing] TTS首句出声 {first_ready - t_synth_start:.2f}s | "
+                              f"整段播完 {t_done - t_synth_start:.2f}s（流式）")
+                    else:
+                        print(f"[timing] TTS流式播完 {t_done - t_synth_start:.2f}s")
+                return
             elif use_stream:
                 first_ready = self._speak_sherpa_stream(text)
                 if _debug_timing:

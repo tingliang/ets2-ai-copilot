@@ -35,9 +35,14 @@ import wave
 # and the pet's expression. See the /tts handler below.
 
 # CosyVoice2 is a zero-shot model: it has no built-in speaker (no spk2info.pt),
-# so every synthesis needs a reference audio (prompt_wav). The official repo
-# ships one at <repo>/asset/zero_shot_prompt.wav, cloned together with the repo.
+# so every synthesis needs a reference audio (prompt_wav) AND its matching text
+# (prompt_text). The official repo ships the reference at
+# <repo>/asset/zero_shot_prompt.wav; its spoken content is the line below. Using
+# an empty prompt_text while supplying a non-empty prompt_wav makes the model
+# decode garbage (it aligns the reference voice to no text), which surfaces as
+# "nonsense speech" — especially after the server has been idle for a while.
 _PROMPT_WAV = os.path.join("asset", "zero_shot_prompt.wav")
+_PROMPT_TEXT = "希望你以后能够做的比我还好呦。"
 
 
 def _resolve_repo_dir() -> str:
@@ -135,7 +140,7 @@ def main():
     if device == "cuda" and prompt_wav:
         try:
             print("[cosyvoice] warming up (first CUDA inference) ...", flush=True)
-            list(engine.inference_zero_shot("你好", "", prompt_wav, stream=False, speed=1.0))
+            list(engine.inference_zero_shot("你好", _PROMPT_TEXT, prompt_wav, stream=False, speed=1.0))
             print("[cosyvoice] warm-up done", flush=True)
         except Exception as e:
             print(f"[cosyvoice] warm-up failed (non-fatal): {e}", flush=True)
@@ -168,9 +173,11 @@ def main():
             import numpy as np
             if not prompt_wav:
                 return jsonify({"error": "no reference audio (prompt_wav) available"}), 500
-            # Plain zero-shot: clone the reference voice, no instruction leak.
+            # Plain zero-shot: clone the reference voice. prompt_text MUST match
+            # the reference audio's content (see _PROMPT_TEXT) — an empty/mismatched
+            # prompt_text is what makes the model output gibberish.
             results = list(
-                engine.inference_zero_shot(text, "", prompt_wav, stream=False, speed=speed)
+                engine.inference_zero_shot(text, _PROMPT_TEXT, prompt_wav, stream=False, speed=speed)
             )
             pcm = np.concatenate([r["tts_speech"].numpy() for r in results]) if results else np.zeros(0, dtype=np.float32)
         except Exception as e:

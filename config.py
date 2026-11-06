@@ -58,6 +58,11 @@ COSYVOICE_HOST = os.environ.get("COSYVOICE_HOST", "127.0.0.1")
 COSYVOICE_PORT = int(os.environ.get("COSYVOICE_PORT", "9860"))
 COSYVOICE_MODEL_DIR = os.environ.get("COSYVOICE_MODEL_DIR", "")  # 空=默认 models/CosyVoice2-0.5B
 COSYVOICE_DEVICE = os.environ.get("COSYVOICE_DEVICE", "auto")  # auto/cuda/cpu
+# 零样本音色克隆：换一段参考音频即可换音色（不用重新训练）。
+# COSYVOICE_PROMPT_WAV  = 参考音频路径（3~10 秒、清晰、单说话人；空=官方默认女声）
+# COSYVOICE_PROMPT_TEXT = 参考音频里**逐字对应**的文本（必须完全一致，否则会乱念）
+COSYVOICE_PROMPT_WAV = os.environ.get("COSYVOICE_PROMPT_WAV", "")
+COSYVOICE_PROMPT_TEXT = os.environ.get("COSYVOICE_PROMPT_TEXT", "")
 # 是否启用情绪控制（把 happy/angry/sad 等映射成 CosyVoice 的语气指令）
 COSYVOICE_EMOTION = os.environ.get("COSYVOICE_EMOTION", "true").strip().lower() in ("1", "true", "yes", "on")
 

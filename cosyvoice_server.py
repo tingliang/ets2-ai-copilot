@@ -109,7 +109,8 @@ def main():
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=9860)
     ap.add_argument("--model-dir", default="", help="CosyVoice2 model dir")
-    ap.add_argument("--prompt-wav", default="", help="reference audio for zero-shot/instruct")
+    ap.add_argument("--prompt-wav", default="", help="reference audio for zero-shot voice cloning")
+    ap.add_argument("--prompt-text", default="", help="verbatim text of the reference audio (MUST match it exactly)")
     ap.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu"])
     args = ap.parse_args()
 
@@ -118,6 +119,7 @@ def main():
         os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "CosyVoice2-0.5B"),
     )
     prompt_wav = args.prompt_wav or _prompt_wav_path()
+    prompt_text = args.prompt_text or _PROMPT_TEXT
 
     # Auto-detect device
     device = args.device
@@ -146,7 +148,8 @@ def main():
     if prompt_wav:
         try:
             print("[cosyvoice] caching reference speaker (add_zero_shot_spk) ...", flush=True)
-            engine.add_zero_shot_spk(_PROMPT_TEXT, prompt_wav, zero_shot_spk_id)
+            print(f"[cosyvoice] prompt text: {prompt_text!r}", flush=True)
+            engine.add_zero_shot_spk(prompt_text, prompt_wav, zero_shot_spk_id)
             print("[cosyvoice] speaker cached", flush=True)
         except Exception as e:
             print(f"[cosyvoice] speaker caching failed (will re-extract per request): {e}", flush=True)

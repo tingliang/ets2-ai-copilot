@@ -416,8 +416,16 @@ def _start_cosyvoice_server() -> bool:
         return False
 
     try:
+        cmd = [python, server, "--model-dir", model_dir, "--device", config.COSYVOICE_DEVICE]
+        # Pass a custom zero-shot reference voice if configured (empty = official default).
+        prompt_wav = getattr(config, "COSYVOICE_PROMPT_WAV", "")
+        prompt_text = getattr(config, "COSYVOICE_PROMPT_TEXT", "")
+        if prompt_wav:
+            cmd += ["--prompt-wav", prompt_wav]
+        if prompt_text:
+            cmd += ["--prompt-text", prompt_text]
         proc = sp.Popen(
-            [python, server, "--model-dir", model_dir, "--device", config.COSYVOICE_DEVICE],
+            cmd,
             cwd=root,
             # 子进程 stdout/stderr 继承，日志直接打到主程序控制台
             stdout=None, stderr=None,

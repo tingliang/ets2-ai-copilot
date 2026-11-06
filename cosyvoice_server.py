@@ -118,8 +118,24 @@ def main():
         "COSYVOICE_MODEL_DIR",
         os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "CosyVoice2-0.5B"),
     )
-    prompt_wav = args.prompt_wav or _prompt_wav_path()
-    prompt_text = args.prompt_text or _PROMPT_TEXT
+    custom_prompt_wav = args.prompt_wav
+    prompt_wav = custom_prompt_wav or _prompt_wav_path()
+
+    # Voice mode:
+    #   zero_shot      -> reference audio text is provided (best when the ref
+    #                     audio is Chinese, content alignment helps quality)
+    #   cross_lingual  -> custom ref audio but NO text supplied (the ref can be
+    #                     ANY language: English/Japanese/... only the timbre is
+    #                     borrowed, not its content)
+    if args.prompt_text:
+        prompt_text = args.prompt_text
+        cross_lingual = False
+    elif custom_prompt_wav:
+        prompt_text = ""
+        cross_lingual = True
+    else:
+        prompt_text = _PROMPT_TEXT
+        cross_lingual = False
 
     # Auto-detect device
     device = args.device
@@ -148,12 +164,23 @@ def main():
     if prompt_wav:
         try:
             print("[cosyvoice] caching reference speaker (add_zero_shot_spk) ...", flush=True)
-            print(f"[cosyvoice] prompt text: {prompt_text!r}", flush=True)
+            print(f"[cosyvoice] mode: {'cross_lingual' if cross_lingual else 'zero_shot'}, prompt text: {prompt_text!r}", flush=True)
             engine.add_zero_shot_spk(prompt_text, prompt_wav, zero_shot_spk_id)
             print("[cosyvoice] speaker cached", flush=True)
         except Exception as e:
             print(f"[cosyvoice] speaker caching failed (will re-extract per request): {e}", flush=True)
             zero_shot_spk_id = ""
+
+    # Single synthesis entry: routes to cross-lingual when the reference audio
+    # has no matching text (ref can be any language, only timbre is borrowed).
+    def _synth(text, stream, speed=1.0):
+        if cross_lingual:
+            return engine.inference_cross_lingual(
+                text, prompt_wav, zero_shot_spk_id=zero_shot_spk_id, stream=stream, speed=speed
+            )
+        return engine.inference_zero_shot(
+            text, "", "", zero_shot_spk_id=zero_shot_spk_id, stream=stream, speed=speed
+        )
 
     # Warm up the GPU: the first synthesis triggers CUDA kernel compilation /
     # cuDNN autotune, which otherwise makes the user's first real request take
@@ -165,9 +192,7 @@ def main():
     if device == "cuda" and zero_shot_spk_id:
         try:
             print("[cosyvoice] warming up (first CUDA inference, streaming) ...", flush=True)
-            for _ in engine.inference_zero_shot(
-                "晚上好呀，夜路开车我陪你聊。", "", "", zero_shot_spk_id=zero_shot_spk_id, stream=True, speed=1.0
-            ):
+            for _ in _synth("晚上好呀，夜路开车我陪你聊。", stream=True):
                 pass
             print("[cosyvoice] warm-up done", flush=True)
         except Exception as e:
@@ -222,9 +247,7 @@ def main():
             # Plain zero-shot with the cached speaker (see add_zero_shot_spk above).
             # Passing the cached zero_shot_spk_id skips the per-request re-extraction
             # of the reference audio features, which is what made short sentences slow.
-            results = list(
-                engine.inference_zero_shot(text, "", "", zero_shot_spk_id=zero_shot_spk_id, stream=False, speed=speed)
-            )
+            results = list(_synth(text, stream=False, speed=speed))
             pcm = np.concatenate([r["tts_speech"].numpy() for r in results]) if results else np.zeros(0, dtype=np.float32)
         except Exception as e:
             print(f"[cosyvoice] synthesis failed: {e}", flush=True)
@@ -251,9 +274,7 @@ def main():
                 if not zero_shot_spk_id and not prompt_wav:
                     yield b"\x00\x00\x00\x00"  # 0-length signals error; then stop
                     return
-                for r in engine.inference_zero_shot(
-                    text, "", "", zero_shot_spk_id=zero_shot_spk_id, stream=True, speed=1.0
-                ):
+                for r in _synth(text, stream=True):
                     chunk_pcm = r["tts_speech"].numpy()
                     if chunk_pcm.ndim == 3:
                         chunk_pcm = chunk_pcm[0, 0]

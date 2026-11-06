@@ -88,6 +88,9 @@ PROACTIVE_COOLDOWN = 300.0    # 两次主动闲聊最小间隔（秒），默认
 PROACTIVE_MIN_SPEED = 30.0    # 平稳行驶速度下限（km/h），低于此不搭话
 PROACTIVE_MAX_SPEED = 120.0   # 平稳行驶速度上限（km/h），高于此（狂飙）不搭话
 
+# 唤醒词免按键（M7）参数
+WAKE_TIMEOUT = 8.0            # 唤醒后这么久（秒）没说正文，自动回到监听态
+
 
 class Recorder:
     """按住录音、松开停止的简易 PTT 录音器。
@@ -96,7 +99,17 @@ class Recorder:
     - start() 找不到输入设备时不崩溃，标记 mic_ready=False，返回 bool
     - 之后每次 start_recording() 都会尝试（重新）打开输入流，蓝牙耳机
       接上后会自动恢复录音能力，无需重启脚本。
+
+    另外提供「持续收音 + VAD 切句」能力（供唤醒词免按键模式用）：
+    - start_continuous()：常驻收音，靠能量阈值把音频切成一「段」说话片段，
+      静音超过 VAD_SILENCE 秒即认为一句话结束，回调 on_utterance(音频)。
+    - stop_continuous()：关闭常驻收音。
     """
+
+    # VAD 参数（能量阈值 + 静音判定时长）
+    VAD_THRESHOLD = 0.015   # RMS 能量阈值，超过算「有声音」
+    VAD_SILENCE = 0.6       # 连续静音这么久（秒）认为一句话结束
+    VAD_MIN_DUR = 0.3       # 一句话最短时长（秒），更短视为噪音丢弃
 
     def __init__(self):
         self._frames: queue.Queue = queue.Queue()
@@ -104,10 +117,18 @@ class Recorder:
         self._chunks: list[np.ndarray] = []
         self._stream = None
         self.mic_ready = False  # 当前是否有可用的输入设备/流
+        # —— 持续收音状态 ——
+        self._continuous = False
+        self._on_utterance = None       # 一句话回调：fn(audio: np.ndarray)
+        self._voice_chunks: list[np.ndarray] = []
+        self._in_voice = False
+        self._silence_blocks = 0
 
     def _callback(self, indata, frames, time_info, status):
         if self._recording:
             self._frames.put(indata.copy())
+        if self._continuous:
+            self._on_block(indata.copy())
 
     def _open_stream(self) -> bool:
         """尝试打开输入流。成功返回 True，失败（无麦克风）返回 False。"""
@@ -165,6 +186,67 @@ class Recorder:
         if not self._chunks:
             return None
         return np.concatenate(self._chunks, axis=0).flatten()
+
+    # ---------- 持续收音 + VAD 切句 ----------
+    def start_continuous(self, on_utterance) -> bool:
+        """常驻收音，检测到一句完整的话就回调 on_utterance(音频)。
+
+        返回是否成功开启（无麦克风返回 False）。
+        """
+        if not self._open_stream():
+            self.mic_ready = False
+            return False
+        self._on_utterance = on_utterance
+        self._voice_chunks = []
+        self._in_voice = False
+        self._silence_blocks = 0
+        self._continuous = True
+        return True
+
+    def stop_continuous(self):
+        """关闭常驻收音（保留输入流，供 PTT 模式复用）。"""
+        self._continuous = False
+        self._on_utterance = None
+        self._voice_chunks = []
+        self._in_voice = False
+        self._silence_blocks = 0
+
+    def _on_block(self, block: np.ndarray):
+        """每收到一块音频，做能量 VAD，切出一句完整的话回调出去。"""
+        # 计算这一块的 RMS 能量（float32 [-1,1]）
+        mono = block.reshape(-1)
+        rms = float(np.sqrt(np.mean(mono.astype(np.float64) ** 2)))
+
+        if rms >= self.VAD_THRESHOLD:
+            # 有声音
+            if not self._in_voice:
+                self._in_voice = True
+                self._voice_chunks = []
+            self._voice_chunks.append(block)
+            self._silence_blocks = 0
+        else:
+            # 静音
+            if self._in_voice:
+                self._voice_chunks.append(block)
+                self._silence_blocks += 1
+                silence_dur = self._silence_blocks * (BLOCK / SAMPLE_RATE)
+                if silence_dur >= self.VAD_SILENCE:
+                    self._emit_utterance()
+
+    def _emit_utterance(self):
+        """把当前收集的一句话交出去（若够长），并复位状态。"""
+        chunks = self._voice_chunks
+        self._voice_chunks = []
+        self._in_voice = False
+        self._silence_blocks = 0
+        if not chunks:
+            return
+        audio = np.concatenate(chunks, axis=0).flatten()
+        dur = len(audio) / SAMPLE_RATE
+        if dur < self.VAD_MIN_DUR:
+            return  # 太短，视为噪音/误触发，丢弃
+        if self._on_utterance:
+            self._on_utterance(audio)
 
 
 class CopilotApp:
@@ -405,15 +487,84 @@ class CopilotApp:
             if audio is not None and len(audio) > SAMPLE_RATE // 4:  # >0.25s 才处理
                 threading.Thread(target=self._handle, args=(audio,), daemon=True).start()
 
+    # ---------- 唤醒词免按键（INPUT_MODE=auto）----------
+    def _start_wakeword_loop(self):
+        """后台线程：持续收音 → VAD 切句 → 转写 → 命中唤醒词进入收音态。
+
+        命中唤醒词后进入「已唤醒」状态，持续收一句完整的话送去对话；
+        对话结束后回到监听态，等下一次喊唤醒词。
+        """
+        self._wake_awake = False  # 是否已唤醒（等待用户说正文）
+        self._wake_awake_at = 0.0  # 唤醒时刻（超时回退用）
+        self._wake_stop = threading.Event()
+
+        def _on_utterance(audio: np.ndarray):
+            # 注意：本回调在 PortAudio 的音频回调线程里执行，必须尽快返回，
+            # 否则会阻塞采集、漏掉音频块。所以这里只做「转发」，把重的
+            # 转写/对话逻辑丢到独立线程。
+            threading.Thread(target=self._process_utterance, args=(audio,), daemon=True).start()
+
+        def _loop():
+            if not self.rec.start_continuous(_on_utterance):
+                print("[wake] 麦克风不可用，唤醒词模式无法启动")
+                return
+            print(f"[wake] 唤醒词监听已启动（说「{config.WAKEWORD or '桃子'}」唤醒）")
+            while not self._wake_stop.is_set():
+                self._wake_stop.wait(0.5)
+            self.rec.stop_continuous()
+
+        self._wake_thread = threading.Thread(target=_loop, daemon=True)
+        self._wake_thread.start()
+
+    def _process_utterance(self, audio: np.ndarray):
+        """唤醒词监听切出一句话后的处理：转写 → 命中唤醒词进入收音态 / 否则对话。
+
+        在独立线程执行（不阻塞音频采集）。
+        """
+        # 正在对话/朗读/录音时，忽略新输入（避免抢话）
+        if self._busy or self.rec.is_recording() or self.tts.is_playing():
+            return
+        try:
+            import stt
+            text = stt.transcribe(audio, SAMPLE_RATE)
+        except Exception as e:
+            print(f"[wake] 转写失败: {e}")
+            return
+        if not text:
+            return
+        text = text.strip()
+        wake = (config.WAKEWORD or "桃子").strip()
+        # 唤醒后超过这么久没说话，自动回到监听态（避免一直挂「已唤醒」）
+        if self._wake_awake and time.time() - self._wake_awake_at > WAKE_TIMEOUT:
+            self._wake_awake = False
+            print("[wake] 唤醒超时，回到监听态")
+        if not self._wake_awake:
+            # 监听态：只认唤醒词
+            if wake and wake in text:
+                self._wake_awake = True
+                self._wake_awake_at = time.time()
+                print(f"[wake] 听到唤醒词「{wake}」，我在听～")
+        else:
+            # 已唤醒：这句就是正文，直接送去对话（复用已转写文本，避免重复 STT）
+            self._wake_awake = False
+            self._last_activity_time = time.time()
+            print(f"你说: {text}")
+            threading.Thread(target=self._handle, args=(audio, text), daemon=True).start()
+
     # ---------- 一轮对话 ----------
-    def _handle(self, audio: np.ndarray):
+    def _handle(self, audio: np.ndarray, pre_text: str | None = None):
+        """一轮对话。audio=音频，pre_text=已经转写好的文本（唤醒词模式复用，避免重复 STT）。"""
         self._busy = True
         t0 = time.time()
         try:
-            import stt
-            t_stt_start = time.time()
-            user_text = stt.transcribe(audio, SAMPLE_RATE)
-            t_stt_end = time.time()
+            if pre_text is not None:
+                user_text = pre_text
+                t_stt_start = t_stt_end = time.time()  # 无 STT 耗时
+            else:
+                import stt
+                t_stt_start = time.time()
+                user_text = stt.transcribe(audio, SAMPLE_RATE)
+                t_stt_end = time.time()
             if not user_text:
                 print("（没听清，忽略）")
                 return
@@ -463,7 +614,11 @@ class CopilotApp:
             self._busy = False
 
     def run(self):
-        print(f"=== ETS2 副驾 M4（按住 {config.get_ptt_key_display()} 说话，朗读中按同一键打断，Ctrl+C 退出）===")
+        input_mode = getattr(config, "INPUT_MODE", "auto") or "auto"
+        if input_mode == "keys":
+            print(f"=== ETS2 副驾 M4（按住 {config.get_ptt_key_display()} 说话，朗读中按同一键打断，Ctrl+C 退出）===")
+        else:
+            print(f"=== ETS2 副驾 M4（说「{config.WAKEWORD or '桃子'}」唤醒后直接说话，Ctrl+C 退出）===")
         print(f"模型: {config.DEEPSEEK_MODEL} @ {config.DEEPSEEK_BASE_URL}")
         print(f"人设: {getattr(config, 'PERSONA', 'xiaoman')}")
         from tts import engine_name
@@ -484,24 +639,55 @@ class CopilotApp:
             self._event_thread = threading.Thread(target=self._event_loop, daemon=True)
             self._event_thread.start()
             print("[event] 事件自动播报已启动")
-        with keyboard.Listener(on_press=self._on_press, on_release=self._on_release) as lis:
+
+        # 语音输入模式：
+        #   auto = 唤醒词免按键（持续监听，喊唤醒词后直接说话）
+        #   keys = 按住 PTT 键说话
+        input_mode = getattr(config, "INPUT_MODE", "auto") or "auto"
+        if input_mode == "keys":
+            with keyboard.Listener(on_press=self._on_press, on_release=self._on_release) as lis:
+                try:
+                    # 主循环：等桌宠「退出」命令或 Ctrl+C 触发整体退出
+                    while not self._quit_event.is_set():
+                        self._quit_event.wait(0.5)
+                except KeyboardInterrupt:
+                    pass
+                finally:
+                    # 统一退出清理：停事件播报、关 TTS/录音、关桌宠
+                    self._event_stop.set()
+                    if self.tts:
+                        try:
+                            self.tts.shutdown()  # 停播放并杀掉 CosyVoice 子进程，释放 GPU 显存
+                        except Exception:
+                            pass
+                    if self.rec:
+                        try:
+                            self.rec.stop_recording()
+                        except Exception:
+                            pass
+                    if self.pet:
+                        self.pet.stop()
+                    print("\n退出。")
+        else:
+            # 唤醒词免按键模式：启动唤醒词监听线程
+            self._start_wakeword_loop()
             try:
-                # 主循环：等桌宠「退出」命令或 Ctrl+C 触发整体退出
                 while not self._quit_event.is_set():
                     self._quit_event.wait(0.5)
             except KeyboardInterrupt:
                 pass
             finally:
-                # 统一退出清理：停事件播报、关 TTS/录音、关桌宠
                 self._event_stop.set()
+                if hasattr(self, "_wake_stop"):
+                    self._wake_stop.set()
                 if self.tts:
                     try:
-                        self.tts.shutdown()  # 停播放并杀掉 CosyVoice 子进程，释放 GPU 显存
+                        self.tts.shutdown()
                     except Exception:
                         pass
                 if self.rec:
                     try:
-                        self.rec.stop_recording()
+                        self.rec.stop_continuous()
                     except Exception:
                         pass
                 if self.pet:

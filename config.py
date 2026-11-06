@@ -30,6 +30,15 @@ WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "base")
 WHISPER_DEVICE = os.environ.get("WHISPER_DEVICE", "auto")
 PTT_KEY = os.environ.get("PTT_KEY", "alt")  # 按住说话热键，见下方支持列表
 
+# ---------- 语音输入模式（免按键 / 按键）----------
+# INPUT_MODE:
+#   auto  = 唤醒词免按键（默认）：持续监听，喊「WAKEWORD」后进入收音，说完整句自动识别。
+#           适合开车时不想腾手按 Alt。
+#   keys  = 按住说话（传统 PTT）：按住 PTT_KEY 说话、松开发送。
+INPUT_MODE = os.environ.get("INPUT_MODE", "auto").strip().lower()
+# 唤醒词（仅 INPUT_MODE=auto 生效），喊这个词唤醒副驾开始听你说话
+WAKEWORD = os.environ.get("WAKEWORD", "桃子").strip()
+
 # ---------- 桌宠 ----------
 # 是否在启动时弹出桌宠窗口（Live2D 副驾形象）。true/1=开启（默认），false/0=关闭。
 # 命令行 --no-pet 可临时覆盖为关闭。

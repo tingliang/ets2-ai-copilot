@@ -72,19 +72,20 @@ COSYVOICE_DEVICE = os.environ.get("COSYVOICE_DEVICE", "auto")  # auto/cuda/cpu
 # COSYVOICE_PROMPT_TEXT = 参考音频里**逐字对应**的文本（中文参考音频必须一致，否则会乱念）
 #   参考音频若不是中文（英文/日文等），**留空 COSYVOICE_PROMPT_TEXT** 即可，
 #   程序会自动切到跨语言克隆（cross-lingual，只借音色、不借内容）。
-# 默认参考音频：voices/kid_voice.wav（用户儿子童声，从演讲中段裁剪）。
+# 默认参考音频：voices/kid_voice.wav（用户儿子童声，语速较快的独立录音）。
 # 若想回到官方成人女声，把 .env 里 COSYVOICE_PROMPT_WAV 和 COSYVOICE_PROMPT_TEXT
 # 都显式设为空字符串（空字符串会覆盖默认值，让子进程回退到官方 zero_shot_prompt.wav）。
 _COSYVOICE_DEFAULT_PROMPT_WAV = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "voices", "kid_voice.wav")
-_COSYVOICE_DEFAULT_PROMPT_TEXT = "是公平的，每个人的时间都一样多"
+_COSYVOICE_DEFAULT_PROMPT_TEXT = "今天是星期六，我要去太原了，我很开心"
 COSYVOICE_PROMPT_WAV = os.environ.get("COSYVOICE_PROMPT_WAV", _COSYVOICE_DEFAULT_PROMPT_WAV)
 COSYVOICE_PROMPT_TEXT = os.environ.get("COSYVOICE_PROMPT_TEXT", _COSYVOICE_DEFAULT_PROMPT_TEXT)
 # 是否启用情绪控制（把 happy/angry/sad 等映射成 CosyVoice 的语气指令）
 COSYVOICE_EMOTION = os.environ.get("COSYVOICE_EMOTION", "true").strip().lower() in ("1", "true", "yes", "on")
 # CosyVoice 语速（独立于 sherpa 的 TTS_LOCAL_SPEED）。流式模式下官方 speed 参数
-# 无效，这里用后处理时间拉伸实现变速。默认 1.15（童声样本偏慢，略微加快）。
-COSYVOICE_SPEED = float(os.environ.get("COSYVOICE_SPEED", "1.15"))
+# 无效，这里用后处理时间拉伸实现变速。默认 1.0（参考音频本身语速已较快）。
+# 若仍觉得慢，可调到 1.1~1.3（后处理变速，会轻微变调）。
+COSYVOICE_SPEED = float(os.environ.get("COSYVOICE_SPEED", "1.0"))
 
 
 # ---------- 热键解析 ----------

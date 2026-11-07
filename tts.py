@@ -44,6 +44,26 @@ def _apply_volume(pcm: np.ndarray) -> np.ndarray:
     return np.clip(pcm * vol, -1.0, 1.0).astype(np.float32)
 
 
+def _time_stretch(pcm: np.ndarray, speed: float) -> np.ndarray:
+    """线性重采样变速（简化时间拉伸）。
+
+    speed > 1.0 = 加快，< 1.0 = 放慢。用 np.interp 对采样点做线性插值，
+    等价于改变播放时长。注意：这是「变速」而非「变调」，采样点线性插值
+    会同步轻微改变音高（加快时略升调）——对「童声说快」的诉求反而更自然。
+
+    不依赖 librosa/scipy，纯 numpy，零额外依赖。
+    """
+    if speed == 1.0 or len(pcm) == 0:
+        return pcm
+    n = len(pcm)
+    # 新的采样点位置：按 speed 缩放后，时长变为 n/speed 个采样点
+    new_n = max(1, int(round(n / speed)))
+    # 在 [0, n-1] 上等距取 new_n 个点做线性插值
+    old_x = np.linspace(0.0, float(n - 1), num=new_n)
+    new_idx = np.arange(n)
+    return np.interp(old_x, new_idx, pcm).astype(np.float32)
+
+
 def _apply_fixed_gain(pcm: np.ndarray, gain: float) -> np.ndarray:
     """统一固定增益缩放。
 
@@ -317,7 +337,8 @@ class _CosyVoiceTTS:
         body = {"text": text}
         if emotion and getattr(config, "COSYVOICE_EMOTION", True):
             body["emotion"] = emotion
-        body["speed"] = getattr(config, "TTS_LOCAL_SPEED", 1.0)
+        # 非流式路径服务端支持 speed（CosyVoice 官方 speed 只在非流式生效）
+        body["speed"] = getattr(config, "COSYVOICE_SPEED", 1.0)
 
         r = self._requests.post(f"{self._url}/tts", json=body, timeout=60)
         r.raise_for_status()
@@ -731,6 +752,11 @@ class TTS:
                 if self._stop_flag.is_set():
                     break
                 self._current_pcm = pcm
+                # CosyVoice 流式模式下 speed 参数无效（官方 assert 限制），
+                # 这里对每个 chunk 做不变音高的时间拉伸实现变速。
+                speed = getattr(config, "COSYVOICE_SPEED", 1.0)
+                if speed != 1.0:
+                    pcm = _time_stretch(pcm, speed)
                 data = np.ascontiguousarray(_apply_volume(pcm)).reshape(-1, 1)
                 stream.write(data)
                 if first_ready is None:

@@ -54,7 +54,7 @@ TTS_ENGINE = os.environ.get("TTS_ENGINE", "sherpa").strip().lower()
 TTS_VOICE = os.environ.get("TTS_VOICE", "zh-CN-shaanxi-XiaoniNeural")  # 仅 edge 引擎生效
 TTS_RATE = os.environ.get("TTS_RATE", "+0%")   # 仅 edge 引擎生效，如 "+20%" / "-10%"
 TTS_LOCAL_MODEL_DIR = os.environ.get("TTS_LOCAL_MODEL_DIR", "")  # sherpa 模型目录（空=默认 models/vits-melo-tts-zh_en）
-TTS_LOCAL_SPEED = float(os.environ.get("TTS_LOCAL_SPEED", "1.0"))  # sherpa 语速，越大越快
+TTS_LOCAL_SPEED = float(os.environ.get("TTS_LOCAL_SPEED", "1.0"))  # 语速，越大越快（sherpa 引擎直接生效）
 TTS_LOCAL_LEAD_SILENCE = float(os.environ.get("TTS_LOCAL_LEAD_SILENCE", "0.12"))  # 句首静音秒数（防首字被吞）
 TTS_VOLUME = float(os.environ.get("TTS_VOLUME", "1.0"))  # 音量，可 >1.0 放大（自动防削波）
 # 按句流式朗读：第一句合成完就开播、边播边合成后续句，显著降低「听到声音」的等待。
@@ -68,14 +68,23 @@ COSYVOICE_PORT = int(os.environ.get("COSYVOICE_PORT", "9860"))
 COSYVOICE_MODEL_DIR = os.environ.get("COSYVOICE_MODEL_DIR", "")  # 空=默认 models/CosyVoice2-0.5B
 COSYVOICE_DEVICE = os.environ.get("COSYVOICE_DEVICE", "auto")  # auto/cuda/cpu
 # 零样本音色克隆：换一段参考音频即可换音色（不用重新训练）。
-# COSYVOICE_PROMPT_WAV  = 参考音频路径（3~10 秒、清晰、单说话人；空=官方默认女声）
+# COSYVOICE_PROMPT_WAV  = 参考音频路径（3~10 秒、清晰、单说话人；空=默认童声，见下）
 # COSYVOICE_PROMPT_TEXT = 参考音频里**逐字对应**的文本（中文参考音频必须一致，否则会乱念）
 #   参考音频若不是中文（英文/日文等），**留空 COSYVOICE_PROMPT_TEXT** 即可，
 #   程序会自动切到跨语言克隆（cross-lingual，只借音色、不借内容）。
-COSYVOICE_PROMPT_WAV = os.environ.get("COSYVOICE_PROMPT_WAV", "")
-COSYVOICE_PROMPT_TEXT = os.environ.get("COSYVOICE_PROMPT_TEXT", "")
+# 默认参考音频：voices/kid_voice.wav（用户儿子童声，从演讲中段裁剪）。
+# 若想回到官方成人女声，把 .env 里 COSYVOICE_PROMPT_WAV 和 COSYVOICE_PROMPT_TEXT
+# 都显式设为空字符串（空字符串会覆盖默认值，让子进程回退到官方 zero_shot_prompt.wav）。
+_COSYVOICE_DEFAULT_PROMPT_WAV = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "voices", "kid_voice.wav")
+_COSYVOICE_DEFAULT_PROMPT_TEXT = "是公平的，每个人的时间都一样多"
+COSYVOICE_PROMPT_WAV = os.environ.get("COSYVOICE_PROMPT_WAV", _COSYVOICE_DEFAULT_PROMPT_WAV)
+COSYVOICE_PROMPT_TEXT = os.environ.get("COSYVOICE_PROMPT_TEXT", _COSYVOICE_DEFAULT_PROMPT_TEXT)
 # 是否启用情绪控制（把 happy/angry/sad 等映射成 CosyVoice 的语气指令）
 COSYVOICE_EMOTION = os.environ.get("COSYVOICE_EMOTION", "true").strip().lower() in ("1", "true", "yes", "on")
+# CosyVoice 语速（独立于 sherpa 的 TTS_LOCAL_SPEED）。流式模式下官方 speed 参数
+# 无效，这里用后处理时间拉伸实现变速。默认 1.15（童声样本偏慢，略微加快）。
+COSYVOICE_SPEED = float(os.environ.get("COSYVOICE_SPEED", "1.15"))
 
 
 # ---------- 热键解析 ----------
